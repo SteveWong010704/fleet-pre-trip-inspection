@@ -1,29 +1,29 @@
 -- ============================================================================
--- Fleet Pre-Trip Inspection System - Microsoft SQL Server Database Script
+-- Fleet Pre-Trip Inspection System - Clean Recreate & Database Script
 -- Target Environment: SSMS / SQL Server 2016+
 -- Server: 192.168.1.80 | User: sa
 -- Database: FleetInspectionDB
 -- ============================================================================
 
--- 1. CREATE DATABASE
-IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = N'FleetInspectionDB')
+USE master;
+GO
+
+-- 1. 彻底清除旧库（如果存在，强制关闭所有连接并删除旧库，避免报错）
+IF EXISTS (SELECT name FROM sys.databases WHERE name = N'FleetInspectionDB')
 BEGIN
-    PRINT 'Creating database FleetInspectionDB...';
-    CREATE DATABASE FleetInspectionDB;
+    PRINT 'Closing existing active connections and dropping old FleetInspectionDB...';
+    ALTER DATABASE FleetInspectionDB SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE FleetInspectionDB;
+    PRINT 'Old FleetInspectionDB dropped successfully.';
 END
 GO
 
-USE FleetInspectionDB;
+-- 2. 重新创建全新的空白数据库
+PRINT 'Creating fresh FleetInspectionDB...';
+CREATE DATABASE FleetInspectionDB;
 GO
 
--- 2. DROP TABLES IN REVERSE DEPENDENCY ORDER (Optional clean rerun)
-IF OBJECT_ID('dbo.InspectionPhotos', 'U') IS NOT NULL DROP TABLE dbo.InspectionPhotos;
-IF OBJECT_ID('dbo.InspectionItems', 'U') IS NOT NULL DROP TABLE dbo.InspectionItems;
-IF OBJECT_ID('dbo.Inspections', 'U') IS NOT NULL DROP TABLE dbo.Inspections;
-IF OBJECT_ID('dbo.AuditLogs', 'U') IS NOT NULL DROP TABLE dbo.AuditLogs;
-IF OBJECT_ID('dbo.Drivers', 'U') IS NOT NULL DROP TABLE dbo.Drivers;
-IF OBJECT_ID('dbo.Vehicles', 'U') IS NOT NULL DROP TABLE dbo.Vehicles;
-IF OBJECT_ID('dbo.SystemSettings', 'U') IS NOT NULL DROP TABLE dbo.SystemSettings;
+USE FleetInspectionDB;
 GO
 
 -- ============================================================================
@@ -245,31 +245,22 @@ GO
 -- ============================================================================
 
 PRINT 'Seeding initial Vehicles...';
-MERGE dbo.Vehicles AS target
-USING (VALUES
+INSERT INTO dbo.Vehicles (
+    VehicleNo, [No], CardNo, PinNo, Litre, LimitRm, Area, Branch, CostCenter, Brand, LogoDate, Advertisement,
+    YearOfMade, Model, EngineNo, ChassisNo, RegistrationDate, TruckCategory, Capacity, Permit, TyreSize,
+    BatteryType, Ages, CurrentStatus, CurrentOdometer, AssignedRoute
+) VALUES
     ('VBP7514', 123, '7002841-710588-020137', '2165', 30.00, 134.00, 'PG01', 'PG', 'PG1200', 'HINO', '3/23/2026', 'Mighty White Enriched 500g', 2023, 'GDY231R-HBMLP3', '1GD9126442', 'PLHAGP6EX02100140', '3/23/2023', 'Feeder', 2280.00, 'JPJ', '195R15C', '95D31L', 3, 'Ready', 58200, 'Route PG-Penang-01'),
     ('VKV3865', 153, '7002841-710588-020434', '1571', 26.00, 116.00, 'SB01', 'SB', 'SB1200', 'HINO', '7/11/2023', 'Black Pepper Chicken Bun', 2023, 'GDY231R-HBMLP3', '1GD9086692', 'PLHAGP6E002100028', '7/6/2023', 'Feeder', 2280.00, 'JPJ', '195/75R15', '95D31L', 3, 'Pending Inspection', 62400, 'Route SB-Seremban-01'),
     ('VJ8971', 173, '7002841-710588-018370', '5517', 20.00, 89.00, 'IP01', 'IP', 'IP1200', 'Isuzu', '2/16/2023', 'MW Loaf', 2016, 'NKR55UEEH', '4JB12M3232', 'PLZNKR55EAP113214', '12/23/2016', 'Small Truck', 2771.00, 'JPJ', '700 x 16', 'N70Z', 10, 'Ready', 195200, 'Route IP-Ipoh-01'),
     ('VQR2765', 240, '7002841-500092-001826', '6837', 24.00, 107.00, 'LN01', 'LN', 'LN1200', 'HINO', '3/25/2026', 'Mighty Slice 6pcs', 2026, 'GDY231R-HBMLP3', '1GD9564813', 'PLHAGP6EX02100599', '3/25/2026', 'Feeder', 2754.00, 'JPJ', '195R15C', '95D31L', 1, 'Ready', 12400, 'Route LN-Lumut-01'),
-    ('WA8956C', 360, '7002841-710588-020830', '9711', 23.00, 103.00, 'JB01', 'JB', 'J21200', 'Isuzu', '5/6/2025', 'Mighty Slice', 2013, 'NKR55UEET-B', '4JB11A6575', 'JAANKR55EC7104800', '6/2/2014', 'Small Truck', 2771.00, 'JPJ', '700 x 16', 'N70Z', 13, 'Ready', 241900, 'Route JB-Skudai-01')
-) AS source (
-    VehicleNo, [No], CardNo, PinNo, Litre, LimitRm, Area, Branch, CostCenter, Brand, LogoDate, Advertisement,
-    YearOfMade, Model, EngineNo, ChassisNo, RegistrationDate, TruckCategory, Capacity, Permit, TyreSize,
-    BatteryType, Ages, CurrentStatus, CurrentOdometer, AssignedRoute
-)
-ON target.VehicleNo = source.VehicleNo
-WHEN NOT MATCHED THEN
-    INSERT (VehicleNo, [No], CardNo, PinNo, Litre, LimitRm, Area, Branch, CostCenter, Brand, LogoDate, Advertisement,
-            YearOfMade, Model, EngineNo, ChassisNo, RegistrationDate, TruckCategory, Capacity, Permit, TyreSize,
-            BatteryType, Ages, CurrentStatus, CurrentOdometer, AssignedRoute)
-    VALUES (source.VehicleNo, source.[No], source.CardNo, source.PinNo, source.Litre, source.LimitRm, source.Area, source.Branch, source.CostCenter, source.Brand, source.LogoDate, source.Advertisement,
-            source.YearOfMade, source.Model, source.EngineNo, source.ChassisNo, source.RegistrationDate, source.TruckCategory, source.Capacity, source.Permit, source.TyreSize,
-            source.BatteryType, source.Ages, source.CurrentStatus, source.CurrentOdometer, source.AssignedRoute);
+    ('WA8956C', 360, '7002841-710588-020830', '9711', 23.00, 103.00, 'JB01', 'JB', 'J21200', 'Isuzu', '5/6/2025', 'Mighty Slice', 2013, 'NKR55UEET-B', '4JB11A6575', 'JAANKR55EC7104800', '6/2/2014', 'Small Truck', 2771.00, 'JPJ', '700 x 16', 'N70Z', 13, 'Ready', 241900, 'Route JB-Skudai-01');
 GO
 
 PRINT 'Seeding initial Drivers...';
-MERGE dbo.Drivers AS target
-USING (VALUES
+INSERT INTO dbo.Drivers (
+    EmployeeId, [No], LoginId, [Password], [Name], Designation, Depot, DepotName, LicenseType, Phone, DateCreated, [Status], AvatarUrl
+) VALUES
     ('SF7620', 1, '7620', 'password', N'AZIMUL AMRI BIN CHE SHA''ARI', 'SALESMAN', 'BL', 'BALAKONG', 'GDL / Class E Heavy', '+60 12-384 7620', '17/1/2026', 'A', 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&auto=format&fit=crop&q=80'),
     ('SF7662', 2, '7662', 'password', N'MOHAD NIZAI BIN MOHAD ZAINI', 'SALESMAN', 'BL', 'BALAKONG', 'GDL / Class D & E', '+60 13-912 7662', '12/2/2026', 'A', 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=120&auto=format&fit=crop&q=80'),
     ('SF7678', 3, '7678', 'password', N'KHAIRIL HAZWAN BIN SAFRI', 'SALESMAN', 'BL', 'BALAKONG', 'GDL Rigid Heavy', '+60 17-482 7678', '24/2/2026', 'A', 'https://images.unsplash.com/photo-1527980965255-d3b416303d12?w=120&auto=format&fit=crop&q=80'),
@@ -281,14 +272,7 @@ USING (VALUES
     ('SF7795', 19, '7795', 'password', N'CHOONG KAH KEAT', 'SALESMAN', 'BL', 'BALAKONG', 'GDL Rigid', '+60 16-229 7795', '4/5/2026', 'A', 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=120&auto=format&fit=crop&q=80'),
     ('SF7967', 26, '7967', 'password', N'ABDUL MUHAYMIN BIN JAMIT', 'SALESMAN', 'BL', 'BALAKONG', 'GDL / Class E Heavy', '+60 19-445 7967', '6/8/2026', 'A', 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=120&auto=format&fit=crop&q=80'),
     ('KL8801', 27, '8801', 'password', N'AHMAD FAIZAL BIN HASSAN', 'DRIVER', 'KL', 'KUALA LUMPUR', 'GDL Heavy / Class E', '+60 12-901 8801', '10/1/2026', 'A', 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=120&auto=format&fit=crop&q=80'),
-    ('KJ8802', 28, '8802', 'password', N'SURESH A/L RAMASAMY', 'DRIVER', 'KJ', 'KELANA JAYA', 'GDL Heavy', '+60 17-334 8802', '15/1/2026', 'A', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=120&auto=format&fit=crop&q=80')
-) AS source (
-    EmployeeId, [No], LoginId, [Password], [Name], Designation, Depot, DepotName, LicenseType, Phone, DateCreated, [Status], AvatarUrl
-)
-ON target.EmployeeId = source.EmployeeId
-WHEN NOT MATCHED THEN
-    INSERT (EmployeeId, [No], LoginId, [Password], [Name], Designation, Depot, DepotName, LicenseType, Phone, DateCreated, [Status], AvatarUrl)
-    VALUES (source.EmployeeId, source.[No], source.LoginId, source.[Password], source.[Name], source.Designation, source.Depot, source.DepotName, source.LicenseType, source.Phone, source.DateCreated, source.[Status], source.AvatarUrl);
+    ('KJ8802', 28, '8802', 'password', N'SURESH A/L RAMASAMY', 'DRIVER', 'KJ', 'KELANA JAYA', 'GDL Heavy', '+60 17-334 8802', '15/1/2026', 'A', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=120&auto=format&fit=crop&q=80');
 GO
 
 PRINT 'Seeding SystemSettings...';
@@ -302,7 +286,7 @@ GO
 -- 4. VERIFICATION QUERY (执行完成后返回各表行数统计)
 -- ============================================================================
 PRINT '==================================================';
-PRINT 'FleetInspectionDB Database Setup Completed Successfully!';
+PRINT 'FleetInspectionDB Database Recreated & Initialized Successfully!';
 PRINT '==================================================';
 
 SELECT 'Vehicles' AS TableName, COUNT(*) AS TotalCount FROM dbo.Vehicles
