@@ -1,0 +1,235 @@
+{
+  "vehicles": [],
+  "drivers": [],
+  "inspections": [],
+  "auditLogs": [
+    {
+      "id": "LOG-MTTSRZIF-488",
+      "timestamp": "2026-09-09T07:49:11.943Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZHY-147",
+      "timestamp": "2026-09-09T07:49:11.926Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZHJ-470",
+      "timestamp": "2026-09-09T07:49:11.911Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZH4-500",
+      "timestamp": "2026-09-09T07:49:11.896Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZGN-352",
+      "timestamp": "2026-09-09T07:49:11.879Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZG7-872",
+      "timestamp": "2026-09-09T07:49:11.863Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZFD-551",
+      "timestamp": "2026-09-09T07:49:11.833Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZEX-827",
+      "timestamp": "2026-09-09T07:49:11.817Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZEJ-290",
+      "timestamp": "2026-09-09T07:49:11.803Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZE4-987",
+      "timestamp": "2026-09-09T07:49:11.788Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZDO-584",
+      "timestamp": "2026-09-09T07:49:11.772Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZD8-488",
+      "timestamp": "2026-09-09T07:49:11.756Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZCP-778",
+      "timestamp": "2026-09-09T07:49:11.737Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZC7-138",
+      "timestamp": "2026-09-09T07:49:11.719Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZBQ-265",
+      "timestamp": "2026-09-09T07:49:11.702Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZB8-406",
+      "timestamp": "2026-09-09T07:49:11.684Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZAO-209",
+      "timestamp": "2026-09-09T07:49:11.664Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZA6-837",
+      "timestamp": "2026-09-09T07:49:11.646Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZ9P-604",
+      "timestamp": "2026-09-09T07:49:11.629Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZ97-639",
+      "timestamp": "2026-09-09T07:49:11.611Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZ8Q-353",
+      "timestamp": "2026-09-09T07:49:11.594Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZ8A-984",
+      "timestamp": "2026-09-09T07:49:11.578Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZ7V-139",
+      "timestamp": "2026-09-09T07:49:11.563Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZ7F-744",
+      "timestamp": "2026-09-09T07:49:11.547Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    },
+    {
+      "id": "LOG-MTTSRZ6V-147",
+      "timestamp": "2026-09-09T07:49:11.527Z",
+      "eventType": "ADMIN_LOGIN",
+      "operator": "admin (Fleet Operations Administrator)",
+      "ip": "127.0.0.1",
+      "details": "Admin logged in successfully to management portal.",
+      "severity": "info"
+    }
+  ],
+  "settings": {
+    "publicBaseUrl": ""
+  }
+}

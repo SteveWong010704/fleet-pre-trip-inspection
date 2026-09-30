@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+html, body {
+  overflow-x: hidden;
+  width: 100%;
+  position: relative;
+  touch-action: pan-y pinch-zoom;
+}
+
+@layer utilities {
+  @media print {
+    .no-print {
+      display: none !important;
+    }
+    body {
+      background-color: #ffffff !important;
+      color: #000000 !important;
+    }
+  }
+}

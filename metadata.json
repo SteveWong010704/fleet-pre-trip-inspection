@@ -1,0 +1,6 @@
+{
+  "name": "Fleet Pre-Trip Inspection System",
+  "description": "Enterprise mobile-first pre-trip vehicle inspection, driver authorization, QR scanner, and dispatcher audit management system with real-time GPS photo capture and bulk fleet updates.",
+  "requestFramePermissions": ["camera", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
