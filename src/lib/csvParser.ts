@@ -141,6 +141,10 @@ export function parseDriverCsv(csvText: string): Partial<Driver>[] {
       rowObj[h] = values[idx] || '';
     });
 
+    const noRaw = (rowObj['NO'] || rowObj['NO.'] || values[0] || '').trim();
+    const parsedNo = parseInt(noRaw, 10);
+    const no = !isNaN(parsedNo) ? parsedNo : undefined;
+
     const employeeId = (rowObj['EMPLOYEE ID'] || rowObj['EMPLOYEEID'] || values[3] || '').trim().toUpperCase();
     const loginId = (rowObj['LOGIN ID'] || rowObj['LOGINID'] || values[4] || employeeId).trim().toUpperCase();
     const password = (rowObj['PASSWORD'] || values[5] || 'password').trim();
@@ -150,11 +154,13 @@ export function parseDriverCsv(csvText: string): Partial<Driver>[] {
     const depotName = (rowObj['DEPOT NAME'] || values[2] || 'BALAKONG').trim().toUpperCase();
     const licenseType = rowObj['LICENSE TYPE'] || 'GDL Heavy';
     const phone = rowObj['PHONE'] || '+60 12-000 0000';
-    const status = (rowObj['STATUS'] || values[9] || 'A').trim().toUpperCase() === 'A' ? 'A' : 'I';
+    const rawStatus = (rowObj['STATUS'] || values[10] || values[9] || 'A').trim().toUpperCase();
+    const status: 'A' | 'I' = (rawStatus === 'I' || rawStatus.startsWith('INACT')) ? 'I' : 'A';
 
     if (!employeeId && !loginId) continue;
 
     results.push({
+      no,
       employeeId: employeeId || loginId,
       loginId,
       password,

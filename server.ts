@@ -19,6 +19,7 @@ import {
   createDriver,
   deleteDriver,
   bulkImportDrivers,
+  unlockDriver,
   verifyAdminLogin,
   getDriverDailyInspection,
   getVehicleDailyInspection,
@@ -572,13 +573,13 @@ async function startServer() {
   });
 
   // Bulk import vehicles (Admin only)
-  app.post('/api/vehicles/bulk', requireAdmin, (req, res) => {
+  app.post('/api/vehicles/bulk', requireAdmin, async (req, res) => {
     try {
       const { vehicles } = req.body;
       if (!Array.isArray(vehicles) || vehicles.length === 0) {
         return res.status(400).json({ success: false, message: 'Invalid vehicles array' });
       }
-      const result = bulkImportVehicles(vehicles);
+      const result = await bulkImportVehicles(vehicles);
       res.json({ success: true, ...result, message: `Successfully updated ${result.updated} and added ${result.added} vehicles.` });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -675,14 +676,31 @@ async function startServer() {
     }
   });
 
+  // Unlock driver account (Admin only)
+  app.post('/api/drivers/unlock', requireAdmin, (req, res) => {
+    try {
+      const { identifier } = req.body;
+      if (!identifier) {
+        return res.status(400).json({ success: false, message: 'Driver identifier is required' });
+      }
+      const result = unlockDriver(identifier);
+      if (!result.success) {
+        return res.status(404).json(result);
+      }
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Bulk import drivers (Admin only)
-  app.post('/api/drivers/bulk', requireAdmin, (req, res) => {
+  app.post('/api/drivers/bulk', requireAdmin, async (req, res) => {
     try {
       const { drivers } = req.body;
       if (!Array.isArray(drivers) || drivers.length === 0) {
         return res.status(400).json({ success: false, message: 'Invalid drivers array' });
       }
-      const result = bulkImportDrivers(drivers);
+      const result = await bulkImportDrivers(drivers);
       res.json({ success: true, ...result, message: `Successfully updated ${result.updated} and added ${result.added} drivers.` });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });

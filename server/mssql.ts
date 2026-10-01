@@ -56,6 +56,29 @@ export async function connectMssql(): Promise<boolean> {
     isConnecting = false;
     console.log(`[MSSQL] ✓ Connected successfully to SQL Server (${config.database} on ${config.server})`);
 
+    // Self-healing schema migration: safely ensure optional & newly added columns exist in dbo.Drivers
+    try {
+      await pool.request().query`
+        IF OBJECT_ID('dbo.Drivers', 'U') IS NOT NULL
+        BEGIN
+          IF COL_LENGTH('dbo.Drivers', 'FailedAttempts') IS NULL
+            ALTER TABLE dbo.Drivers ADD FailedAttempts INT NOT NULL DEFAULT 0;
+          IF COL_LENGTH('dbo.Drivers', 'LockedUntil') IS NULL
+            ALTER TABLE dbo.Drivers ADD LockedUntil DATETIME2 NULL;
+          IF COL_LENGTH('dbo.Drivers', 'AvatarUrl') IS NULL
+            ALTER TABLE dbo.Drivers ADD AvatarUrl NVARCHAR(500) NULL;
+          IF COL_LENGTH('dbo.Drivers', 'LicenseType') IS NULL
+            ALTER TABLE dbo.Drivers ADD LicenseType NVARCHAR(100) NULL;
+          IF COL_LENGTH('dbo.Drivers', 'DepotName') IS NULL
+            ALTER TABLE dbo.Drivers ADD DepotName NVARCHAR(100) NULL;
+          IF COL_LENGTH('dbo.Drivers', 'DateCreated') IS NULL
+            ALTER TABLE dbo.Drivers ADD DateCreated NVARCHAR(50) NULL;
+        END
+      `;
+    } catch (migErr) {
+      console.warn('[MSSQL Migration Warning] Non-critical schema migration check:', migErr);
+    }
+
     // Verify tables exist
     const testResult = await pool.request().query`
       SELECT 
@@ -233,42 +256,109 @@ export async function dbLoadDrivers(): Promise<Driver[]> {
 export async function dbSaveDriver(d: Driver): Promise<void> {
   if (!isMssqlConnected() || !pool) return;
   try {
+    const cleanEmpId = (d.employeeId || d.loginId || '').trim().toUpperCase();
+    const cleanLoginId = (d.loginId || d.employeeId || '').trim().toUpperCase();
+    if (!cleanEmpId || !cleanLoginId) return;
+
+    const noVal = typeof d.no === 'number' ? d.no : (parseInt(String(d.no || 0), 10) || null);
+    const rawStatus = (d.status ? String(d.status).trim().substring(0, 1).toUpperCase() : 'A');
+    const safeStatus = (rawStatus === 'A' || rawStatus === 'I') ? rawStatus : 'A';
+
+    let safeLockedUntil: Date | null = null;
+    if (d.lockedUntil) {
+      const dt = new Date(d.lockedUntil);
+      if (!isNaN(dt.getTime())) {
+        safeLockedUntil = dt;
+      }
+    }
+
     const req = pool.request();
-    req.input('EmployeeId', sql.NVarChar(50), d.employeeId);
-    req.input('No', sql.Int, d.no || null);
-    req.input('LoginId', sql.NVarChar(50), d.loginId);
+    req.input('EmployeeId', sql.NVarChar(50), cleanEmpId);
+    req.input('No', sql.Int, noVal);
+    req.input('LoginId', sql.NVarChar(50), cleanLoginId);
     req.input('Password', sql.NVarChar(255), d.password || 'password');
-    req.input('Name', sql.NVarChar(150), d.name);
-    req.input('Designation', sql.NVarChar(50), d.designation || 'SALESMAN');
-    req.input('Depot', sql.NVarChar(50), d.depot || 'BL');
+    req.input('Name', sql.NVarChar(150), (d.name || cleanEmpId).trim());
+    req.input('Designation', sql.NVarChar(50), (d.designation || 'SALESMAN').trim());
+    req.input('Depot', sql.NVarChar(50), (d.depot || 'BL').trim().toUpperCase());
     req.input('DepotName', sql.NVarChar(100), d.depotName || null);
     req.input('LicenseType', sql.NVarChar(100), d.licenseType || null);
     req.input('Phone', sql.NVarChar(50), d.phone || null);
     req.input('DateCreated', sql.NVarChar(50), d.dateCreated || null);
-    req.input('Status', sql.Char(1), d.status || 'A');
+    req.input('Status', sql.Char(1), safeStatus);
     req.input('AvatarUrl', sql.NVarChar(500), d.avatarUrl || null);
-    req.input('FailedAttempts', sql.Int, d.failedAttempts || 0);
+    req.input('FailedAttempts', sql.Int, typeof d.failedAttempts === 'number' ? d.failedAttempts : 0);
+    req.input('LockedUntil', sql.DateTime2, safeLockedUntil);
 
     await req.query`
-      MERGE dbo.Drivers AS target
-      USING (SELECT @EmployeeId AS EmployeeId) AS source
-      ON target.EmployeeId = source.EmployeeId
-      WHEN MATCHED THEN
-        UPDATE SET
-          [No] = @No, LoginId = @LoginId, [Password] = @Password, [Name] = @Name,
-          Designation = @Designation, Depot = @Depot, DepotName = @DepotName,
-          LicenseType = @LicenseType, Phone = @Phone, DateCreated = @DateCreated,
-          [Status] = @Status, AvatarUrl = @AvatarUrl, FailedAttempts = @FailedAttempts,
+      IF EXISTS (SELECT 1 FROM dbo.Drivers WHERE EmployeeId = @EmployeeId OR LoginId = @LoginId)
+      BEGIN
+        UPDATE dbo.Drivers SET
+          LoginId = @LoginId,
+          [No] = @No,
+          [Password] = @Password,
+          [Name] = @Name,
+          Designation = @Designation,
+          Depot = @Depot,
+          DepotName = @DepotName,
+          LicenseType = @LicenseType,
+          Phone = @Phone,
+          DateCreated = @DateCreated,
+          [Status] = @Status,
+          AvatarUrl = @AvatarUrl,
+          FailedAttempts = @FailedAttempts,
+          LockedUntil = @LockedUntil,
           UpdatedAt = SYSUTCDATETIME()
-      WHEN NOT MATCHED THEN
-        INSERT (EmployeeId, [No], LoginId, [Password], [Name], Designation, Depot,
-                DepotName, LicenseType, Phone, DateCreated, [Status], AvatarUrl, FailedAttempts)
-        VALUES (@EmployeeId, @No, @LoginId, @Password, @Name, @Designation, @Depot,
-                @DepotName, @LicenseType, @Phone, @DateCreated, @Status, @AvatarUrl, @FailedAttempts);
+        WHERE EmployeeId = @EmployeeId OR LoginId = @LoginId;
+      END
+      ELSE
+      BEGIN
+        INSERT INTO dbo.Drivers (
+          EmployeeId, [No], LoginId, [Password], [Name], Designation, Depot,
+          DepotName, LicenseType, Phone, DateCreated, [Status], AvatarUrl, FailedAttempts, LockedUntil
+        ) VALUES (
+          @EmployeeId, @No, @LoginId, @Password, @Name, @Designation, @Depot,
+          @DepotName, @LicenseType, @Phone, @DateCreated, @Status, @AvatarUrl, @FailedAttempts, @LockedUntil
+        );
+      END
     `;
   } catch (err) {
     console.error(`[MSSQL Error] dbSaveDriver failed for ${d.employeeId}:`, err);
+    throw err;
   }
+}
+
+export async function dbBulkSaveDrivers(drivers: Driver[]): Promise<{ saved: number; errors: number }> {
+  if (!isMssqlConnected() || !pool) return { saved: 0, errors: 0 };
+  let saved = 0;
+  let errors = 0;
+  for (const d of drivers) {
+    try {
+      await dbSaveDriver(d);
+      saved++;
+    } catch (e) {
+      errors++;
+      console.error(`[MSSQL Bulk Save Error] Driver ${d.employeeId || d.loginId}:`, e);
+    }
+  }
+  console.log(`[MSSQL Bulk Driver Sync] Persisted ${saved} drivers to SQL Server (${errors} errors).`);
+  return { saved, errors };
+}
+
+export async function dbBulkSaveVehicles(vehicles: Vehicle[]): Promise<{ saved: number; errors: number }> {
+  if (!isMssqlConnected() || !pool) return { saved: 0, errors: 0 };
+  let saved = 0;
+  let errors = 0;
+  for (const v of vehicles) {
+    try {
+      await dbSaveVehicle(v);
+      saved++;
+    } catch (e) {
+      errors++;
+      console.error(`[MSSQL Bulk Save Error] Vehicle ${v.vehicleNo}:`, e);
+    }
+  }
+  console.log(`[MSSQL Bulk Vehicle Sync] Persisted ${saved} vehicles to SQL Server (${errors} errors).`);
+  return { saved, errors };
 }
 
 export async function dbDeleteDriver(employeeId: string): Promise<void> {

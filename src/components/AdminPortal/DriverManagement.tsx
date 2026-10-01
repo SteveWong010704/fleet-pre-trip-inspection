@@ -148,9 +148,9 @@ export const DriverManagement: React.FC = () => {
         lockedUntil: null,
       });
       loadDrivers();
-      alert(`Driver ${driver.employeeId} account unlocked & security counters reset.`);
+      setMsg({ type: 'success', text: `Driver ${driver.employeeId} account unlocked & security counters reset.` });
     } catch (err: any) {
-      alert(err.message || 'Failed to unlock driver.');
+      setMsg({ type: 'error', text: err.message || 'Failed to unlock driver.' });
     }
   };
 
@@ -161,8 +161,9 @@ export const DriverManagement: React.FC = () => {
       await deleteDriver(driverToDelete.employeeId);
       setDriverToDelete(null);
       loadDrivers();
+      setMsg({ type: 'success', text: `Driver ${driverToDelete.employeeId} removed successfully.` });
     } catch (err: any) {
-      alert(err.message || 'Failed to delete driver.');
+      setMsg({ type: 'error', text: err.message || 'Failed to delete driver.' });
     } finally {
       setIsProcessing(false);
     }
