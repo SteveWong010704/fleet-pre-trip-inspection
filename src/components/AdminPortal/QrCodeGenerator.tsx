@@ -48,6 +48,8 @@ export const QrCodeGenerator: React.FC = () => {
   const [selectedPlates, setSelectedPlates] = useState<Set<string>>(new Set());
   const [qrMap, setQrMap] = useState<Record<string, string>>({});
   const [printLayout, setPrintLayout] = useState<'standard' | 'compact' | 'large'>('standard');
+  const [laminationGap, setLaminationGap] = useState<'4cm' | '2cm' | 'compact'>('4cm');
+  const [showCutGuides, setShowCutGuides] = useState<boolean>(true);
   const [printScope, setPrintScope] = useState<'current_tab' | 'selected' | 'all_filtered'>('current_tab');
   const [isGeneratingPrintQrs, setIsGeneratingPrintQrs] = useState<boolean>(false);
 
@@ -559,7 +561,7 @@ export const QrCodeGenerator: React.FC = () => {
                 printLayout === 'standard' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600'
               }`}
             >
-              Standard (6 / A4)
+              Standard (4 / A4)
             </button>
             <button
               type="button"
@@ -568,7 +570,7 @@ export const QrCodeGenerator: React.FC = () => {
                 printLayout === 'compact' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600'
               }`}
             >
-              Compact (12 / A4)
+              Compact (6 / A4)
             </button>
             <button
               type="button"
@@ -580,6 +582,55 @@ export const QrCodeGenerator: React.FC = () => {
               Large (2 / A4)
             </button>
           </div>
+        </div>
+
+        {/* Lamination Margin & Anti-Peel Spacing Banner */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
+          <div className="flex items-center space-x-2">
+            <span className="font-bold text-slate-700 flex items-center gap-1.5">
+              <span>✂ 过塑安全裁切留边 (Lamination Spacing):</span>
+            </span>
+            <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setLaminationGap('4cm')}
+                className={`px-3 py-1 rounded-lg font-bold text-xs transition cursor-pointer flex items-center gap-1 ${
+                  laminationGap === '4cm' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="卡片之间留出 4cm (40mm) 间隙，剪切后两边各留约 2cm 封胶边，过塑后绝不开胶脱层"
+              >
+                <span>⭐ 留 4cm (推荐过塑防开胶)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setLaminationGap('2cm')}
+                className={`px-3 py-1 rounded-lg font-bold text-xs transition cursor-pointer ${
+                  laminationGap === '2cm' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                留 2cm (常规)
+              </button>
+              <button
+                type="button"
+                onClick={() => setLaminationGap('compact')}
+                className={`px-3 py-1 rounded-lg font-bold text-xs transition cursor-pointer ${
+                  laminationGap === 'compact' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                紧凑 (无留边)
+              </button>
+            </div>
+          </div>
+
+          <label className="flex items-center space-x-1.5 cursor-pointer font-semibold text-slate-700 text-xs">
+            <input
+              type="checkbox"
+              checked={showCutGuides}
+              onChange={(e) => setShowCutGuides(e.target.checked)}
+              className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+            />
+            <span>打印虚线裁切指引 (Cut Lines ✂)</span>
+          </label>
         </div>
       </div>
 
@@ -790,63 +841,85 @@ export const QrCodeGenerator: React.FC = () => {
             })}
           </div>
 
-          {/* PRINT-ONLY RENDERING: Formatted for clean printing (supports active tab, selected, or all) */}
+          {/* PRINT-ONLY RENDERING: Formatted for clean printing with 4cm lamination spacing */}
           <div
-            className={`hidden print:grid gap-3 ${
-              printLayout === 'compact'
-                ? 'print:grid-cols-3'
-                : printLayout === 'large'
-                ? 'print:grid-cols-1'
-                : 'print:grid-cols-2'
+            className={`hidden print:grid ${
+              printLayout === 'large' ? 'print:grid-cols-1' : 'print:grid-cols-2'
             }`}
+            style={{
+              rowGap: laminationGap === '4cm' ? '40mm' : laminationGap === '2cm' ? '20mm' : '10mm',
+              columnGap: laminationGap === '4cm' ? '40mm' : laminationGap === '2cm' ? '20mm' : '10mm',
+              padding: laminationGap === '4cm' ? '12mm 8mm' : '6mm',
+            }}
           >
             {vehiclesToPrint.map((v) => {
               const qrSrc = qrMap[v.vehicleNo];
               return (
                 <div
                   key={v.vehicleNo}
-                  className="bg-white text-slate-900 border-2 border-slate-900 rounded-2xl p-4 flex flex-col justify-between break-inside-avoid shadow-none"
+                  className="break-inside-avoid print:break-inside-avoid relative"
+                  style={{
+                    pageBreakInside: 'avoid',
+                    breakInside: 'avoid',
+                  }}
                 >
-                  <div className="flex items-center justify-between space-x-4">
-                    <div className="space-y-1 truncate flex-1">
-                      <div className="text-[9px] uppercase font-bold tracking-widest text-slate-500 font-mono">
-                        PRE-TRIP INSPECTION PASS
-                      </div>
-                      <div className="font-mono text-2xl font-black text-slate-950 tracking-wider">
-                        {v.vehicleNo}
-                      </div>
-                      <div className="text-xs font-bold text-slate-800 truncate">
-                        {v.brand} • {v.model}
-                      </div>
-                      <div className="text-[10px] text-slate-600 font-mono">
-                        Depot: <strong>{v.branch}</strong> ({v.area || 'Central'}) | {(v.truckCategory === 'Feeder' || String(v.model || '').toLowerCase().includes('feeder')) ? 'FEEDER' : 'SMALL TRUCK'}
-                      </div>
-                      <div className="text-[9px] text-slate-400 font-mono">
-                        Card: {v.cardNo?.slice(-6) || 'N/A'} • PIN: {v.pinNo || '****'}
-                      </div>
-                    </div>
-
-                    <div className="flex-shrink-0 flex flex-col items-center">
-                      {qrSrc ? (
-                        <img
-                          src={qrSrc}
-                          alt={`QR for ${v.vehicleNo}`}
-                          className={`${
-                            printLayout === 'large'
-                              ? 'w-32 h-32'
-                              : printLayout === 'compact'
-                              ? 'w-20 h-20'
-                              : 'w-24 h-24'
-                          } p-1 border border-slate-900 rounded-lg bg-white`}
-                        />
-                      ) : (
-                        <div className="w-24 h-24 border border-slate-900 rounded-lg flex items-center justify-center text-xs">
-                          QR
-                        </div>
-                      )}
-                      <span className="text-[8px] font-mono font-bold text-slate-700 mt-1 uppercase">
-                        SCAN FOR PRE-TRIP
+                  {/* Visual cut guideline for lamination */}
+                  {showCutGuides && laminationGap !== 'compact' && (
+                    <div
+                      className="absolute border border-dashed border-slate-400 rounded-2xl pointer-events-none"
+                      style={{
+                        top: laminationGap === '4cm' ? '-18mm' : '-8mm',
+                        bottom: laminationGap === '4cm' ? '-18mm' : '-8mm',
+                        left: laminationGap === '4cm' ? '-18mm' : '-8mm',
+                        right: laminationGap === '4cm' ? '-18mm' : '-8mm',
+                      }}
+                    >
+                      <span className="absolute -top-2.5 left-4 bg-white px-2 font-mono text-[8px] text-slate-500 uppercase tracking-widest font-bold">
+                        ✂ 裁切虚线 CUT LINE ({laminationGap} LAMINATION SEAL)
                       </span>
+                    </div>
+                  )}
+
+                  <div className="bg-white text-slate-900 border-2 border-slate-900 rounded-xl p-4 flex flex-col justify-between break-inside-avoid shadow-none relative z-10">
+                    <div className="flex items-center justify-between space-x-4">
+                      <div className="space-y-1 truncate flex-1">
+                        <div className="text-[9px] uppercase font-bold tracking-widest text-slate-500 font-mono">
+                          PRE-TRIP INSPECTION PASS
+                        </div>
+                        <div className="font-mono text-2xl font-black text-slate-950 tracking-wider">
+                          {v.vehicleNo}
+                        </div>
+                        <div className="text-xs font-bold text-slate-800 truncate">
+                          {v.brand} • {v.model}
+                        </div>
+                        <div className="text-[10px] text-slate-600 font-mono">
+                          Depot: <strong>{v.branch}</strong> ({v.area || 'Central'}) | {(v.truckCategory === 'Feeder' || String(v.model || '').toLowerCase().includes('feeder')) ? 'FEEDER' : 'SMALL TRUCK'}
+                        </div>
+                        <div className="text-[9px] text-slate-400 font-mono">
+                          Card: {v.cardNo?.slice(-6) || 'N/A'} • PIN: {v.pinNo || '****'}
+                        </div>
+                      </div>
+
+                      <div className="flex-shrink-0 flex flex-col items-center">
+                        {qrSrc ? (
+                          <img
+                            src={qrSrc}
+                            alt={`QR for ${v.vehicleNo}`}
+                            className={`${
+                              printLayout === 'large'
+                                ? 'w-32 h-32'
+                                : 'w-24 h-24'
+                            } p-1 border border-slate-900 rounded-lg bg-white`}
+                          />
+                        ) : (
+                          <div className="w-24 h-24 border border-slate-900 rounded-lg flex items-center justify-center text-xs">
+                            QR
+                          </div>
+                        )}
+                        <span className="text-[8px] font-mono font-bold text-slate-700 mt-1 uppercase">
+                          SCAN FOR PRE-TRIP
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
