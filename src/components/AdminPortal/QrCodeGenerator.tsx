@@ -588,7 +588,7 @@ export const QrCodeGenerator: React.FC = () => {
         <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
           <div className="flex items-center space-x-2">
             <span className="font-bold text-slate-700 flex items-center gap-1.5">
-              <span>✂ 过塑安全裁切留边 (Lamination Spacing):</span>
+              <span>✂ Lamination Seal Spacing:</span>
             </span>
             <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl">
               <button
@@ -597,9 +597,9 @@ export const QrCodeGenerator: React.FC = () => {
                 className={`px-3 py-1 rounded-lg font-bold text-xs transition cursor-pointer flex items-center gap-1 ${
                   laminationGap === '4cm' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
                 }`}
-                title="卡片之间留出 4cm (40mm) 间隙，剪切后两边各留约 2cm 封胶边，过塑后绝不开胶脱层"
+                title="Leaves ~4cm (40mm) gap between cards so each cut badge keeps ~2cm sealed laminate edge to prevent peeling"
               >
-                <span>⭐ 留 4cm (推荐过塑防开胶)</span>
+                <span>⭐ 4cm Gap (Lamination Safe)</span>
               </button>
               <button
                 type="button"
@@ -608,7 +608,7 @@ export const QrCodeGenerator: React.FC = () => {
                   laminationGap === '2cm' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                留 2cm (常规)
+                2cm Gap (Standard)
               </button>
               <button
                 type="button"
@@ -617,7 +617,7 @@ export const QrCodeGenerator: React.FC = () => {
                   laminationGap === 'compact' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                紧凑 (无留边)
+                Compact (No Extra Gap)
               </button>
             </div>
           </div>
@@ -629,7 +629,7 @@ export const QrCodeGenerator: React.FC = () => {
               onChange={(e) => setShowCutGuides(e.target.checked)}
               className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
             />
-            <span>打印虚线裁切指引 (Cut Lines ✂)</span>
+            <span>Print Dashed Cut Guides (✂)</span>
           </label>
         </div>
       </div>
@@ -875,7 +875,7 @@ export const QrCodeGenerator: React.FC = () => {
                       }}
                     >
                       <span className="absolute -top-2.5 left-4 bg-white px-2 font-mono text-[8px] text-slate-500 uppercase tracking-widest font-bold">
-                        ✂ 裁切虚线 CUT LINE ({laminationGap} LAMINATION SEAL)
+                        ✂ CUT LINE ({laminationGap.toUpperCase()} LAMINATION SEAL)
                       </span>
                     </div>
                   )}
