@@ -10,9 +10,11 @@ import {
   dbLoadVehicles,
   dbSaveVehicle,
   dbDeleteVehicle,
+  dbBulkSaveVehicles,
   dbLoadDrivers,
   dbSaveDriver,
   dbDeleteDriver,
+  dbBulkSaveDrivers,
   dbLoadInspections,
   dbSaveInspection,
   dbDeleteInspection,
@@ -158,14 +160,14 @@ export function initStore() {
               memoryStore.vehicles = dbV;
             } else if (memoryStore.vehicles.length > 0) {
               console.log(`[MSSQL Auto-Sync] SQL Server Vehicles table is empty, auto-pushing ${memoryStore.vehicles.length} local vehicles to SQL Server...`);
-              memoryStore.vehicles.forEach(v => dbSaveVehicle(v).catch(e => console.error('[MSSQL Error] auto-sync vehicle:', e)));
+              await dbBulkSaveVehicles(memoryStore.vehicles);
             }
 
             if (dbD.length > 0) {
               memoryStore.drivers = dbD;
             } else if (memoryStore.drivers.length > 0) {
               console.log(`[MSSQL Auto-Sync] SQL Server Drivers table is empty, auto-pushing ${memoryStore.drivers.length} local drivers to SQL Server...`);
-              memoryStore.drivers.forEach(d => dbSaveDriver(d).catch(e => console.error('[MSSQL Error] auto-sync driver:', e)));
+              await dbBulkSaveDrivers(memoryStore.drivers);
             }
 
             if (dbI.length > 0) memoryStore.inspections = dbI;
@@ -284,11 +286,31 @@ export function updateVehicle(vehicleNo: string, updates: Partial<Vehicle>): Veh
   const index = memoryStore.vehicles.findIndex(v => v.vehicleNo.replace(/\s+/g, '').toUpperCase() === cleanPlate);
   if (index === -1) return null;
 
+  const currentStatus = memoryStore.vehicles[index].currentStatus;
+  const newStatus = updates.currentStatus;
+
+  if (newStatus && newStatus !== currentStatus) {
+    // Rule: Direct manual transition to 'Ready' is strictly prohibited
+    // Only a driver completing a verified pre-trip inspection can mark a vehicle as Ready
+    if (newStatus === 'Ready' && currentStatus !== 'Ready') {
+      throw new Error(`Data Integrity Rule: Direct manual transition to 'Ready' is prohibited. Vehicles must complete a verified driver pre-trip inspection to earn 'Ready' certification.`);
+    }
+
+    // Rule: Cannot manually downgrade a certified 'Ready' vehicle to 'Pending Inspection'
+    if (currentStatus === 'Ready' && newStatus === 'Pending Inspection') {
+      throw new Error(`Data Integrity Rule: Cannot manually reset a certified 'Ready' vehicle to 'Pending'. If maintenance is needed, ground the vehicle instead.`);
+    }
+
+    // Allowed: 'Grounded' -> 'Pending Inspection' (released from maintenance, awaiting driver inspection)
+    // Allowed: 'Ready' or 'Pending Inspection' -> 'Grounded' (immediate grounding for safety/defect)
+  }
+
   memoryStore.vehicles[index] = {
     ...memoryStore.vehicles[index],
     ...updates,
     vehicleNo: updates.vehicleNo ? updates.vehicleNo.replace(/\s+/g, '').toUpperCase() : memoryStore.vehicles[index].vehicleNo,
   };
+  invalidateFleetStatsCache();
   saveStore();
   dbSaveVehicle(memoryStore.vehicles[index]).catch(e => console.error('[MSSQL Error] saveVehicle:', e));
   return memoryStore.vehicles[index];
@@ -363,7 +385,7 @@ export function deleteVehicle(vehicleNo: string): boolean {
   return false;
 }
 
-export function bulkImportVehicles(vehiclesList: Partial<Vehicle>[]): { added: number; updated: number } {
+export async function bulkImportVehicles(vehiclesList: Partial<Vehicle>[]): Promise<{ added: number; updated: number; dbSaved?: number }> {
   let added = 0;
   let updated = 0;
 
@@ -420,13 +442,24 @@ export function bulkImportVehicles(vehiclesList: Partial<Vehicle>[]): { added: n
   });
 
   saveStore();
+
+  const vehiclesToSave: Vehicle[] = [];
   vehiclesList.forEach(v => {
     if (v.vehicleNo) {
       const fullV = getVehicleByPlate(v.vehicleNo);
-      if (fullV) dbSaveVehicle(fullV).catch(e => console.error('[MSSQL Error] bulkSaveVehicle:', e));
+      if (fullV && !vehiclesToSave.some(x => x.vehicleNo === fullV.vehicleNo)) {
+        vehiclesToSave.push(fullV);
+      }
     }
   });
-  return { added, updated };
+
+  let dbSaved = 0;
+  if (vehiclesToSave.length > 0) {
+    const res = await dbBulkSaveVehicles(vehiclesToSave);
+    dbSaved = res.saved;
+  }
+
+  return { added, updated, dbSaved };
 }
 
 // Driver APIs
@@ -501,20 +534,21 @@ export function verifyDriverLogin(loginId: string, passwordAttempt: string): { s
     return { success: true, driver };
   } else {
     driver.failedAttempts = (driver.failedAttempts || 0) + 1;
-    const remaining = Math.max(0, 5 - driver.failedAttempts);
+    const remaining = Math.max(0, 30 - driver.failedAttempts);
 
-    if (driver.failedAttempts >= 5) {
-      // Lock for 15 minutes
-      driver.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    if (driver.failedAttempts >= 30) {
+      // Lock account after 30 failed attempts until admin unlocks or 24 hours pass
+      driver.lockedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       addAuditLog({
         eventType: 'LOCKOUT_TRIGGERED',
         operator: `${driver.employeeId} (${driver.name})`,
         ip: '192.168.1.100',
-        details: 'Security lockout initiated: 5 consecutive invalid password entries.',
+        details: 'Security lockout initiated: 30 consecutive invalid password entries.',
         severity: 'danger',
       });
       saveStore();
-      return { success: false, locked: true, message: 'Account locked for 15 minutes due to multiple failed attempts.' };
+      dbSaveDriver(driver).catch(e => console.error('[MSSQL Error] saveDriverLockout:', e));
+      return { success: false, locked: true, message: 'Account locked: 30 consecutive invalid password attempts reached. Please contact dispatch administrator to unlock your account.' };
     }
 
     saveStore();
@@ -522,7 +556,7 @@ export function verifyDriverLogin(loginId: string, passwordAttempt: string): { s
   }
 }
 
-export function bulkImportDrivers(driversList: Partial<Driver>[]): { added: number; updated: number } {
+export async function bulkImportDrivers(driversList: Partial<Driver>[]): Promise<{ added: number; updated: number; dbSaved?: number }> {
   let added = 0;
   let updated = 0;
 
@@ -572,17 +606,25 @@ export function bulkImportDrivers(driversList: Partial<Driver>[]): { added: numb
   });
 
   saveStore();
-  // Persist all imported/updated drivers to SQL Server
+
+  const driversToSave: Driver[] = [];
   driversList.forEach(item => {
     const key = (item.loginId || item.employeeId || '').toUpperCase().trim();
     if (key) {
       const fullD = getDriverByLogin(key);
-      if (fullD) {
-        dbSaveDriver(fullD).catch(e => console.error('[MSSQL Error] bulkSaveDriver:', e));
+      if (fullD && !driversToSave.some(x => x.employeeId === fullD.employeeId)) {
+        driversToSave.push(fullD);
       }
     }
   });
-  return { added, updated };
+
+  let dbSaved = 0;
+  if (driversToSave.length > 0) {
+    const res = await dbBulkSaveDrivers(driversToSave);
+    dbSaved = res.saved;
+  }
+
+  return { added, updated, dbSaved };
 }
 
 export function updateDriver(identifier: string, updates: Partial<Driver>): Driver | null {
@@ -612,6 +654,36 @@ export function updateDriver(identifier: string, updates: Partial<Driver>): Driv
   saveStore();
   dbSaveDriver(memoryStore.drivers[index]).catch(e => console.error('[MSSQL Error] updateDriver:', e));
   return memoryStore.drivers[index];
+}
+
+export function unlockDriver(identifier: string): { success: boolean; message: string; driver?: Driver } {
+  const cleanKey = identifier.trim().toUpperCase();
+  const index = memoryStore.drivers.findIndex(d => 
+    d.loginId.toUpperCase() === cleanKey || 
+    d.employeeId.toUpperCase() === cleanKey
+  );
+  if (index === -1) {
+    return { success: false, message: `Driver with ID ${identifier} not found.` };
+  }
+
+  memoryStore.drivers[index].failedAttempts = 0;
+  memoryStore.drivers[index].lockedUntil = null;
+
+  addAuditLog({
+    eventType: 'DRIVER_UNLOCKED',
+    operator: 'Admin Dispatcher',
+    ip: '127.0.0.1',
+    details: `Driver account ${memoryStore.drivers[index].employeeId} (${memoryStore.drivers[index].name}) unlocked by admin. Security counters reset.`,
+    severity: 'info',
+  });
+
+  saveStore();
+  dbSaveDriver(memoryStore.drivers[index]).catch(e => console.error('[MSSQL Error] unlockDriver:', e));
+  return {
+    success: true,
+    message: `Driver ${memoryStore.drivers[index].name} (${memoryStore.drivers[index].employeeId}) unlocked successfully. Attempts reset to 0.`,
+    driver: memoryStore.drivers[index],
+  };
 }
 
 export function createDriver(driverData: Partial<Driver>): Driver {
@@ -718,20 +790,39 @@ export function verifyAdminLogin(usernameAttempt: string, passwordAttempt: strin
   return { success: false, message: 'Invalid admin username or password.' };
 }
 
-// Helper to check if two dates/timestamps are the same calendar day (checking UTC and local dates)
-export function isSameDay(isoTimestamp: string, targetDate = new Date()): boolean {
+// Helper to extract calendar date string (YYYY-MM-DD) in local / Asia/Kuala_Lumpur timezone
+export function getCalendarDateString(date: Date | string = new Date()): string {
   try {
-    const d1 = new Date(isoTimestamp);
-    const d2 = targetDate;
-    if (d1.toISOString().slice(0, 10) === d2.toISOString().slice(0, 10)) return true;
-    const local1 = `${d1.getFullYear()}-${String(d1.getMonth() + 1).padStart(2, '0')}-${String(d1.getDate()).padStart(2, '0')}`;
-    const local2 = `${d2.getFullYear()}-${String(d2.getMonth() + 1).padStart(2, '0')}-${String(d2.getDate()).padStart(2, '0')}`;
-    if (local1 === local2) return true;
-  } catch {}
-  return false;
+    const d = typeof date === 'string' ? new Date(date) : date;
+    if (isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kuala_Lumpur',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(d);
+  } catch {
+    const d = typeof date === 'string' ? new Date(date) : date;
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
 }
 
-// Check Driver Daily Inspection
+// Helper to check if two dates/timestamps are on the exact same calendar day
+export function isSameDay(isoTimestamp: string, targetDate: Date | string = new Date()): boolean {
+  if (!isoTimestamp) return false;
+  try {
+    const date1 = getCalendarDateString(isoTimestamp);
+    const date2 = getCalendarDateString(targetDate);
+    return Boolean(date1 && date2 && date1 === date2);
+  } catch {
+    return false;
+  }
+}
+
+// Check Driver Daily Inspection (returns latest today inspection record if exists)
 export function getDriverDailyInspection(driverId: string): InspectionRecord | null {
   if (!driverId) return null;
   const cleanId = driverId.trim().toUpperCase();
@@ -743,7 +834,7 @@ export function getDriverDailyInspection(driverId: string): InspectionRecord | n
   return existing || null;
 }
 
-// Check Vehicle Daily Inspection (A truck can ONLY be inspected once per day across all drivers)
+// Check Vehicle Daily Inspection (returns latest today inspection record if exists)
 export function getVehicleDailyInspection(vehicleNo: string): InspectionRecord | null {
   if (!vehicleNo) return null;
   const cleanPlate = vehicleNo.trim().toUpperCase().replace(/\s+/g, '');
@@ -757,16 +848,11 @@ export function getVehicleDailyInspection(vehicleNo: string): InspectionRecord |
 
 // Inspection APIs
 export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'timestamp' | 'formattedDate'>): InspectionRecord {
-  // 1. Check if driver has already completed an inspection today
+  // Check if truck or driver had an earlier inspection today (Logged for audit, but NEVER hard locks out drivers)
   const existingDriverToday = getDriverDailyInspection(inspectionData.driverId);
-  if (existingDriverToday) {
-    throw new Error(`Daily Inspection Limit Reached: Driver ${inspectionData.driverName || inspectionData.driverId} has already completed an inspection today (${existingDriverToday.id}) for vehicle ${existingDriverToday.vehicleNo}. Each driver is restricted to 1 inspection per day.`);
-  }
-
-  // 2. Check if vehicle (truck) has already been inspected today by ANY driver
   const existingVehicleToday = getVehicleDailyInspection(inspectionData.vehicleNo);
   if (existingVehicleToday) {
-    throw new Error(`Vehicle Already Inspected Today: Truck ${inspectionData.vehicleNo} has already completed daily inspection today (${existingVehicleToday.id}) by driver ${existingVehicleToday.driverName || existingVehicleToday.driverId}. Each truck is limited to 1 inspection per day.`);
+    console.log(`[Inspection Notice] Vehicle ${inspectionData.vehicleNo} already had earlier inspection today (${existingVehicleToday.id}). Processing new departure / shift re-inspection...`);
   }
 
   const timestamp = new Date().toISOString();
@@ -1326,27 +1412,58 @@ export function getFleetStats(filters?: { branch?: string; date?: string; route?
     const plateKey = v.vehicleNo.replace(/\s+/g, '').toUpperCase();
     const insp = inspectedPlatesMap.get(plateKey);
 
-    if (insp) {
-      inspectedCount++;
-      depotStatsMap[br].inspected++;
-      if (insp.overallResult === 'Pass') {
-        readyVehicles++;
-        passedInspections++;
-        depotStatsMap[br].passed++;
-      } else {
+    const isToday = !filters?.date || isSameDay(selectedDate, new Date());
+
+    if (isToday) {
+      // Real-time live fleet overview: directly reflect current vehicle status and inspections
+      if (v.currentStatus === 'Grounded') {
         groundedVehicles++;
         failedInspections++;
         depotStatsMap[br].defects++;
+        if (insp) {
+          inspectedCount++;
+          depotStatsMap[br].inspected++;
+        }
+      } else if (v.currentStatus === 'Ready') {
+        readyVehicles++;
+        inspectedCount++;
+        passedInspections++;
+        depotStatsMap[br].inspected++;
+        depotStatsMap[br].passed++;
+      } else {
+        // Pending Inspection
+        pendingVehicles++;
+        depotStatsMap[br].pending++;
+        pendingVehicleList.push(v);
+        if (insp) {
+          inspectedCount++;
+          depotStatsMap[br].inspected++;
+        }
       }
     } else {
-      pendingVehicles++;
-      depotStatsMap[br].pending++;
-      pendingVehicleList.push(v);
+      // Historical date view: reflect the historical inspection records on that date
+      if (insp) {
+        inspectedCount++;
+        depotStatsMap[br].inspected++;
+        if (insp.overallResult === 'Pass') {
+          readyVehicles++;
+          passedInspections++;
+          depotStatsMap[br].passed++;
+        } else {
+          groundedVehicles++;
+          failedInspections++;
+          depotStatsMap[br].defects++;
+        }
+      } else {
+        pendingVehicles++;
+        depotStatsMap[br].pending++;
+        pendingVehicleList.push(v);
+      }
     }
   });
 
   const completionRate = totalFilteredVehicles > 0
-    ? Math.round((inspectedCount / totalFilteredVehicles) * 1000) / 10
+    ? Math.round((readyVehicles / totalFilteredVehicles) * 1000) / 10
     : 0;
 
   const depotBreakdown = Object.entries(depotStatsMap).map(([branch, data]) => ({
