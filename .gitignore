@@ -7,5 +7,6 @@ coverage/
 logs/
 uploads/
 backups/
+data/
 .env*
 !.env.example
