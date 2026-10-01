@@ -14,7 +14,22 @@ Enterprise mobile-first pre-trip vehicle inspection, driver authorization, QR sc
 
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, Lucide React
 - **Backend**: Node.js, Express, tsx
-- **Storage**: Local JSON database with backup & export capabilities
+- **Storage**: Microsoft SQL Server (SSMS) & Local JSON dual-engine
+
+## Microsoft SQL Server (SSMS) Setup
+
+1. Open **SQL Server Management Studio (SSMS)** and connect to your SQL Server (e.g. `192.168.1.215`).
+2. Open the initialization script located at `scripts/init_mssql_database.sql`.
+3. Press **F5 (Execute)** to create the `FleetInspectionDB` database, tables, foreign keys, and seed data.
+4. Set your database connection parameters in `.env`:
+   ```env
+   DB_TYPE=mssql
+   MSSQL_SERVER=192.168.1.215
+   MSSQL_PORT=1433
+   MSSQL_USER=sa
+   MSSQL_PASSWORD=StrongPassword123
+   MSSQL_DATABASE=FleetInspectionDB
+   ```
 
 ## Getting Started
 

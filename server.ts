@@ -39,6 +39,7 @@ import {
   getSettings,
   updateSettings,
   pruneOldInspections,
+  getDatabaseStatus,
 } from './server/storage';
 import {
   initBackupService,
@@ -395,6 +396,11 @@ async function startServer() {
       },
       system: 'Fleet Pre-Trip Inspection Engine',
     });
+  });
+
+  // Database Connection Status (MSSQL SSMS vs JSON)
+  app.get('/api/database/status', (req, res) => {
+    res.json(getDatabaseStatus());
   });
 
   // System Logs Viewer endpoint (in-memory circular buffer with level filtering)

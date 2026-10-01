@@ -3,6 +3,22 @@ import path from 'path';
 import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, VehicleStatus } from '../src/types';
 import { scheduleDebouncedBackup } from './backupService';
 import { logger } from './logger';
+import {
+  connectMssql,
+  isMssqlConnected,
+  getMssqlConfig,
+  dbLoadVehicles,
+  dbSaveVehicle,
+  dbDeleteVehicle,
+  dbLoadDrivers,
+  dbSaveDriver,
+  dbDeleteDriver,
+  dbLoadInspections,
+  dbSaveInspection,
+  dbDeleteInspection,
+  dbLoadAuditLogs,
+  dbSaveAuditLog,
+} from './mssql';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
@@ -123,6 +139,33 @@ export function initStore() {
       memoryStore.settings = { publicBaseUrl: envPublicUrl };
       saveStore(true);
     }
+
+    // Connect to Microsoft SQL Server (SSMS) and synchronize data
+    if (process.env.DB_TYPE !== 'json') {
+      connectMssql().then(async (connected) => {
+        if (connected) {
+          try {
+            const [dbV, dbD, dbI, dbA] = await Promise.all([
+              dbLoadVehicles(),
+              dbLoadDrivers(),
+              dbLoadInspections(),
+              dbLoadAuditLogs(),
+            ]);
+            if (dbV.length > 0) memoryStore.vehicles = dbV;
+            if (dbD.length > 0) memoryStore.drivers = dbD;
+            if (dbI.length > 0) memoryStore.inspections = dbI;
+            if (dbA.length > 0) memoryStore.auditLogs = dbA;
+            console.log(`[MSSQL Sync] Successfully synchronized with SQL Server: ${memoryStore.vehicles.length} Vehicles, ${memoryStore.drivers.length} Drivers, ${memoryStore.inspections.length} Inspections.`);
+            saveStore(true);
+            invalidateFleetStatsCache();
+          } catch (syncErr) {
+            console.error('[MSSQL Sync Error] Failed to populate cache from SQL Server:', syncErr);
+          }
+        }
+      }).catch(err => {
+        console.warn('[MSSQL Connection Warning] Startup connection failed, running on local cache:', err);
+      });
+    }
   } catch (err) {
     console.error('[Storage Error]', err);
   }
@@ -232,6 +275,7 @@ export function updateVehicle(vehicleNo: string, updates: Partial<Vehicle>): Veh
     vehicleNo: updates.vehicleNo ? updates.vehicleNo.replace(/\s+/g, '').toUpperCase() : memoryStore.vehicles[index].vehicleNo,
   };
   saveStore();
+  dbSaveVehicle(memoryStore.vehicles[index]).catch(e => console.error('[MSSQL Error] saveVehicle:', e));
   return memoryStore.vehicles[index];
 }
 
@@ -281,6 +325,7 @@ export function createVehicle(vehicleData: Partial<Vehicle>): Vehicle {
   });
 
   saveStore();
+  dbSaveVehicle(newVehicle).catch(e => console.error('[MSSQL Error] createVehicle:', e));
   return newVehicle;
 }
 
@@ -297,6 +342,7 @@ export function deleteVehicle(vehicleNo: string): boolean {
       severity: 'warning',
     });
     saveStore();
+    dbDeleteVehicle(cleanPlate).catch(e => console.error('[MSSQL Error] deleteVehicle:', e));
     return true;
   }
   return false;
@@ -359,6 +405,12 @@ export function bulkImportVehicles(vehiclesList: Partial<Vehicle>[]): { added: n
   });
 
   saveStore();
+  vehiclesList.forEach(v => {
+    if (v.vehicleNo) {
+      const fullV = getVehicleByPlate(v.vehicleNo);
+      if (fullV) dbSaveVehicle(fullV).catch(e => console.error('[MSSQL Error] bulkSaveVehicle:', e));
+    }
+  });
   return { added, updated };
 }
 
@@ -533,6 +585,7 @@ export function updateDriver(identifier: string, updates: Partial<Driver>): Driv
   });
 
   saveStore();
+  dbSaveDriver(memoryStore.drivers[index]).catch(e => console.error('[MSSQL Error] updateDriver:', e));
   return memoryStore.drivers[index];
 }
 
@@ -579,6 +632,7 @@ export function createDriver(driverData: Partial<Driver>): Driver {
   });
 
   saveStore();
+  dbSaveDriver(newDriver).catch(e => console.error('[MSSQL Error] createDriver:', e));
   return newDriver;
 }
 
@@ -598,6 +652,7 @@ export function deleteDriver(identifier: string): boolean {
       severity: 'warning',
     });
     saveStore();
+    dbDeleteDriver(cleanKey).catch(e => console.error('[MSSQL Error] deleteDriver:', e));
     return true;
   }
   return false;
@@ -877,6 +932,7 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
 
   saveStore();
   invalidateFleetStatsCache();
+  dbSaveInspection(record).catch(e => console.error('[MSSQL Error] saveInspection:', e));
   return record;
 }
 
@@ -1021,6 +1077,7 @@ export function addAuditLog(log: Omit<AuditLog, 'id' | 'timestamp'>): AuditLog {
     memoryStore.auditLogs.pop();
   }
   saveStore();
+  dbSaveAuditLog(record).catch(e => console.error('[MSSQL Error] saveAuditLog:', e));
   return record;
 }
 
@@ -1471,5 +1528,16 @@ export function updateSettings(newSettings: { publicBaseUrl?: string }) {
   }
   saveStore();
   return memoryStore.settings;
+}
+
+export function getDatabaseStatus() {
+  const cfg = getMssqlConfig();
+  return {
+    mode: process.env.DB_TYPE === 'json' ? 'JSON' : 'MSSQL',
+    isMssqlConnected: isMssqlConnected(),
+    server: cfg.server,
+    database: cfg.database,
+    user: cfg.user,
+  };
 }
 
