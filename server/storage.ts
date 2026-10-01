@@ -18,6 +18,9 @@ import {
   dbDeleteInspection,
   dbLoadAuditLogs,
   dbSaveAuditLog,
+  dbClearDrivers,
+  dbClearVehicles,
+  dbClearInspections,
 } from './mssql';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -151,8 +154,20 @@ export function initStore() {
               dbLoadInspections(),
               dbLoadAuditLogs(),
             ]);
-            if (dbV.length > 0) memoryStore.vehicles = dbV;
-            if (dbD.length > 0) memoryStore.drivers = dbD;
+            if (dbV.length > 0) {
+              memoryStore.vehicles = dbV;
+            } else if (memoryStore.vehicles.length > 0) {
+              console.log(`[MSSQL Auto-Sync] SQL Server Vehicles table is empty, auto-pushing ${memoryStore.vehicles.length} local vehicles to SQL Server...`);
+              memoryStore.vehicles.forEach(v => dbSaveVehicle(v).catch(e => console.error('[MSSQL Error] auto-sync vehicle:', e)));
+            }
+
+            if (dbD.length > 0) {
+              memoryStore.drivers = dbD;
+            } else if (memoryStore.drivers.length > 0) {
+              console.log(`[MSSQL Auto-Sync] SQL Server Drivers table is empty, auto-pushing ${memoryStore.drivers.length} local drivers to SQL Server...`);
+              memoryStore.drivers.forEach(d => dbSaveDriver(d).catch(e => console.error('[MSSQL Error] auto-sync driver:', e)));
+            }
+
             if (dbI.length > 0) memoryStore.inspections = dbI;
             if (dbA.length > 0) memoryStore.auditLogs = dbA;
             console.log(`[MSSQL Sync] Successfully synchronized with SQL Server: ${memoryStore.vehicles.length} Vehicles, ${memoryStore.drivers.length} Drivers, ${memoryStore.inspections.length} Inspections.`);
@@ -557,6 +572,16 @@ export function bulkImportDrivers(driversList: Partial<Driver>[]): { added: numb
   });
 
   saveStore();
+  // Persist all imported/updated drivers to SQL Server
+  driversList.forEach(item => {
+    const key = (item.loginId || item.employeeId || '').toUpperCase().trim();
+    if (key) {
+      const fullD = getDriverByLogin(key);
+      if (fullD) {
+        dbSaveDriver(fullD).catch(e => console.error('[MSSQL Error] bulkSaveDriver:', e));
+      }
+    }
+  });
   return { added, updated };
 }
 
@@ -1040,6 +1065,7 @@ export function clearAllInspections(): void {
     lastInspectionCode: undefined,
   }));
   saveStore();
+  dbClearInspections().catch(e => console.error('[MSSQL Error] clearInspections:', e));
 }
 
 // Full fleet database wipe - resets to 100% clean state
@@ -1049,6 +1075,9 @@ export function clearAllFleetData(): { success: boolean; message: string } {
   memoryStore.inspections = [];
   memoryStore.auditLogs = [];
   saveStore();
+  dbClearVehicles().catch(e => console.error('[MSSQL Error] clearVehicles:', e));
+  dbClearDrivers().catch(e => console.error('[MSSQL Error] clearDrivers:', e));
+  dbClearInspections().catch(e => console.error('[MSSQL Error] clearInspections:', e));
   return { success: true, message: 'All fleet vehicles, drivers, and inspection logs successfully cleared. Ready for your own data upload.' };
 }
 
@@ -1056,12 +1085,15 @@ export function clearAllVehicles(): { success: boolean; message: string } {
   memoryStore.vehicles = [];
   memoryStore.inspections = [];
   saveStore();
+  dbClearVehicles().catch(e => console.error('[MSSQL Error] clearVehicles:', e));
+  dbClearInspections().catch(e => console.error('[MSSQL Error] clearInspections:', e));
   return { success: true, message: 'All vehicles successfully cleared from database.' };
 }
 
 export function clearAllDrivers(): { success: boolean; message: string } {
   memoryStore.drivers = [];
   saveStore();
+  dbClearDrivers().catch(e => console.error('[MSSQL Error] clearDrivers:', e));
   return { success: true, message: 'All drivers successfully cleared from database.' };
 }
 

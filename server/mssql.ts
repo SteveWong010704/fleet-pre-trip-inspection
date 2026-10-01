@@ -282,6 +282,36 @@ export async function dbDeleteDriver(employeeId: string): Promise<void> {
   }
 }
 
+export async function dbClearDrivers(): Promise<void> {
+  if (!isMssqlConnected() || !pool) return;
+  try {
+    await pool.request().query`DELETE FROM dbo.Drivers`;
+    console.log('[MSSQL] All drivers cleared from SQL Server.');
+  } catch (err) {
+    console.error('[MSSQL Error] dbClearDrivers failed:', err);
+  }
+}
+
+export async function dbClearVehicles(): Promise<void> {
+  if (!isMssqlConnected() || !pool) return;
+  try {
+    await pool.request().query`DELETE FROM dbo.Vehicles`;
+    console.log('[MSSQL] All vehicles cleared from SQL Server.');
+  } catch (err) {
+    console.error('[MSSQL Error] dbClearVehicles failed:', err);
+  }
+}
+
+export async function dbClearInspections(): Promise<void> {
+  if (!isMssqlConnected() || !pool) return;
+  try {
+    await pool.request().query`DELETE FROM dbo.Inspections`;
+    console.log('[MSSQL] All inspections cleared from SQL Server.');
+  } catch (err) {
+    console.error('[MSSQL Error] dbClearInspections failed:', err);
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Database Operations: INSPECTIONS
 // ----------------------------------------------------------------------------
