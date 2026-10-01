@@ -848,11 +848,18 @@ export function getVehicleDailyInspection(vehicleNo: string): InspectionRecord |
 
 // Inspection APIs
 export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'timestamp' | 'formattedDate'>): InspectionRecord {
-  // Check if truck or driver had an earlier inspection today (Logged for audit, but NEVER hard locks out drivers)
-  const existingDriverToday = getDriverDailyInspection(inspectionData.driverId);
+  const todayStr = getCalendarDateString(new Date());
+
+  // 1. Enforce 1 inspection per vehicle per calendar day (strictly date-based, not 24h timer)
   const existingVehicleToday = getVehicleDailyInspection(inspectionData.vehicleNo);
   if (existingVehicleToday) {
-    console.log(`[Inspection Notice] Vehicle ${inspectionData.vehicleNo} already had earlier inspection today (${existingVehicleToday.id}). Processing new departure / shift re-inspection...`);
+    throw new Error(`Vehicle Already Inspected Today: Truck ${inspectionData.vehicleNo} has already completed daily inspection for date ${todayStr} (Cert #${existingVehicleToday.id}) by driver ${existingVehicleToday.driverName || existingVehicleToday.driverId}. Each truck is limited to 1 inspection per calendar day.`);
+  }
+
+  // 2. Enforce 1 inspection per driver per calendar day (strictly date-based, not 24h timer)
+  const existingDriverToday = getDriverDailyInspection(inspectionData.driverId);
+  if (existingDriverToday) {
+    throw new Error(`Daily Inspection Limit Reached: Driver ${inspectionData.driverName || inspectionData.driverId} has already completed daily inspection for date ${todayStr} (Cert #${existingDriverToday.id}) for vehicle ${existingDriverToday.vehicleNo}. Each driver is restricted to 1 vehicle inspection per calendar day.`);
   }
 
   const timestamp = new Date().toISOString();
