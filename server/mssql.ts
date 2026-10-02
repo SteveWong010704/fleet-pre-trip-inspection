@@ -504,7 +504,13 @@ export async function dbSaveInspection(record: InspectionRecord): Promise<void> 
     req.input('GpsAccuracy', sql.Decimal(10, 2), record.gpsLocation?.accuracy || null);
     req.input('GpsAddress', sql.NVarChar(500), record.gpsLocation?.address || null);
 
-    const decl = record.driverDeclaration || {};
+    const decl = (record.driverDeclaration || {}) as {
+      uniformAndLicense?: boolean;
+      fitAndRested?: boolean;
+      substanceFree?: boolean;
+      scheduleAndRestAcknowledged?: boolean;
+      cargoSafeBDM?: boolean;
+    };
     req.input('DriverDeclUniform', sql.Bit, decl.uniformAndLicense !== false ? 1 : 0);
     req.input('DriverDeclFit', sql.Bit, decl.fitAndRested !== false ? 1 : 0);
     req.input('DriverDeclSubstanceFree', sql.Bit, decl.substanceFree !== false ? 1 : 0);
