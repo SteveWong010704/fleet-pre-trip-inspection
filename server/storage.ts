@@ -252,12 +252,7 @@ export function saveStore(immediate: boolean = false) {
 
 // Vehicle APIs
 export function getVehicleEffectiveStatus(v: Vehicle, targetDate: Date | string = new Date()): VehicleStatus {
-  // 1. If vehicle was grounded for safety defects or maintenance, it remains Grounded
-  if (v.currentStatus === 'Grounded') {
-    return 'Grounded';
-  }
-
-  // 2. Check if the vehicle has completed an inspection on the target calendar date
+  // 1. Check if the vehicle has completed an inspection on the target calendar date
   const cleanPlate = v.vehicleNo.replace(/\s+/g, '').toUpperCase();
   const insp = memoryStore.inspections.find(i => 
     i.vehicleNo.replace(/\s+/g, '').toUpperCase() === cleanPlate &&
@@ -266,6 +261,12 @@ export function getVehicleEffectiveStatus(v: Vehicle, targetDate: Date | string 
 
   if (insp) {
     return insp.overallResult === 'Pass' ? 'Ready' : 'Grounded';
+  }
+
+  // 2. If no inspection on target date:
+  // If the vehicle was grounded for maintenance or safety, it remains Grounded
+  if (v.currentStatus === 'Grounded') {
+    return 'Grounded';
   }
 
   // 3. New calendar day with no inspection performed yet: strictly Pending Inspection!
@@ -311,7 +312,7 @@ export function getVehicleByPlate(plate: string): Vehicle | undefined {
   };
 }
 
-export function updateVehicle(vehicleNo: string, updates: Partial<Vehicle>): Vehicle | null {
+export function updateVehicle(vehicleNo: string, updates: Partial<Vehicle>, isInspectionSystem: boolean = false): Vehicle | null {
   const cleanPlate = vehicleNo.replace(/\s+/g, '').toUpperCase();
   const index = memoryStore.vehicles.findIndex(v => v.vehicleNo.replace(/\s+/g, '').toUpperCase() === cleanPlate);
   if (index === -1) return null;
@@ -319,20 +320,23 @@ export function updateVehicle(vehicleNo: string, updates: Partial<Vehicle>): Veh
   const currentStatus = memoryStore.vehicles[index].currentStatus;
   const newStatus = updates.currentStatus;
 
-  if (newStatus && newStatus !== currentStatus) {
-    // Rule: Direct manual transition to 'Ready' is strictly prohibited
-    // Only a driver completing a verified pre-trip inspection can mark a vehicle as Ready
-    if (newStatus === 'Ready' && currentStatus !== 'Ready') {
-      throw new Error(`Data Integrity Rule: Direct manual transition to 'Ready' is prohibited. Vehicles must complete a verified driver pre-trip inspection to earn 'Ready' certification.`);
+  if (!isInspectionSystem && newStatus && newStatus !== currentStatus) {
+    // Admin Rule 1: Admin CANNOT manually set a vehicle to 'Ready'
+    // Ready can ONLY be achieved when a driver completes and passes a verified pre-trip inspection
+    if (newStatus === 'Ready') {
+      throw new Error(`Data Integrity Rule: Direct manual change to 'Ready' is prohibited. A vehicle can only achieve 'Ready' certification when a driver conducts and passes today's pre-trip inspection.`);
     }
 
-    // Rule: Cannot manually downgrade a certified 'Ready' vehicle to 'Pending Inspection'
+    // Admin Rule 2: Admin CANNOT manually change a 'Ready' vehicle to 'Pending Inspection'
+    // If a Ready vehicle has an issue, Admin must ground it instead
     if (currentStatus === 'Ready' && newStatus === 'Pending Inspection') {
-      throw new Error(`Data Integrity Rule: Cannot manually reset a certified 'Ready' vehicle to 'Pending'. If maintenance is needed, ground the vehicle instead.`);
+      throw new Error(`Data Integrity Rule: Admin cannot change 'Ready' to 'Pending Inspection'. If maintenance or repair is required, change it to 'Grounded'.`);
     }
 
-    // Allowed: 'Grounded' -> 'Pending Inspection' (released from maintenance, awaiting driver inspection)
-    // Allowed: 'Ready' or 'Pending Inspection' -> 'Grounded' (immediate grounding for safety/defect)
+    // Admin Rule 3: Allowed transitions for Admin:
+    // - 'Grounded' -> 'Pending Inspection' (Released from maintenance, waiting for driver inspection)
+    // - 'Ready' -> 'Grounded' (Immediate grounding for fault/defect)
+    // - 'Pending Inspection' -> 'Grounded' (Hold for maintenance)
   }
 
   memoryStore.vehicles[index] = {
@@ -1064,7 +1068,7 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
     lastInspectionCode: id,
     lastDriverName: record.driverName,
     currentOdometer: record.odometer,
-  });
+  }, true);
 
   // Add audit log
   const locNote = record.gpsLocation?.address ? ` [Location: ${record.gpsLocation.address}]` : '';
@@ -1482,7 +1486,7 @@ export function getFleetStats(filters?: { branch?: string; date?: string; route?
   });
 
   const completionRate = totalFilteredVehicles > 0
-    ? Math.round((readyVehicles / totalFilteredVehicles) * 1000) / 10
+    ? Math.round((inspectedCount / totalFilteredVehicles) * 1000) / 10
     : 0;
 
   const depotBreakdown = Object.entries(depotStatsMap).map(([branch, data]) => ({
@@ -1623,7 +1627,7 @@ export function bulkImportInspections(inspectionsList: Partial<InspectionRecord>
       lastInspectionCode: id,
       lastDriverName: record.driverName,
       currentOdometer: record.odometer,
-    });
+    }, true);
   });
 
   addAuditLog({
