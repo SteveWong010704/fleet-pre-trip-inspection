@@ -248,9 +248,11 @@ export const FleetOverview: React.FC = () => {
       if (activeModalVehicle?.vehicleNo === vehicleNo) {
         setActiveModalVehicle(updated);
       }
+      setMsg({ type: 'success', text: `Vehicle ${vehicleNo} status updated to ${newStatus}.` });
       loadData(true);
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message || 'Status transition not allowed.' });
+      loadData(true);
     }
   };
 
@@ -595,9 +597,24 @@ export const FleetOverview: React.FC = () => {
                               : 'bg-amber-50 text-amber-700 border-amber-200'
                           }`}
                         >
-                          <option value="Ready">Ready 🟢</option>
-                          <option value="Pending Inspection">Pending 🟡</option>
-                          <option value="Grounded">Grounded 🔴</option>
+                          {v.currentStatus === 'Ready' && (
+                            <>
+                              <option value="Ready">Ready 🟢</option>
+                              <option value="Grounded">Ground Vehicle 🔴</option>
+                            </>
+                          )}
+                          {v.currentStatus === 'Grounded' && (
+                            <>
+                              <option value="Grounded">Grounded 🔴</option>
+                              <option value="Pending Inspection">Release to Pending 🟡</option>
+                            </>
+                          )}
+                          {v.currentStatus === 'Pending Inspection' && (
+                            <>
+                              <option value="Pending Inspection">Pending 🟡</option>
+                              <option value="Grounded">Ground Vehicle 🔴</option>
+                            </>
+                          )}
                         </select>
                       </td>
                       <td className="py-3.5 px-4 font-mono text-slate-500 text-[11px]">
@@ -904,9 +921,24 @@ export const FleetOverview: React.FC = () => {
                     onChange={(e) => setVehicleForm({ ...vehicleForm, currentStatus: e.target.value as any })}
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="Pending Inspection">Pending Inspection 🟡</option>
-                    <option value="Ready">Ready for Dispatch 🟢</option>
-                    <option value="Grounded">Grounded / Maintenance 🔴</option>
+                    {vehicleForm.currentStatus === 'Ready' && (
+                      <>
+                        <option value="Ready">Ready for Dispatch 🟢 (Passed Inspection)</option>
+                        <option value="Grounded">Grounded / Maintenance 🔴</option>
+                      </>
+                    )}
+                    {vehicleForm.currentStatus === 'Grounded' && (
+                      <>
+                        <option value="Grounded">Grounded / Maintenance 🔴</option>
+                        <option value="Pending Inspection">Pending Inspection 🟡 (Released from Repair)</option>
+                      </>
+                    )}
+                    {(!vehicleForm.currentStatus || vehicleForm.currentStatus === 'Pending Inspection') && (
+                      <>
+                        <option value="Pending Inspection">Pending Inspection 🟡 (Awaiting Driver Check)</option>
+                        <option value="Grounded">Grounded / Maintenance 🔴</option>
+                      </>
+                    )}
                   </select>
                 </div>
 
