@@ -251,8 +251,33 @@ export function saveStore(immediate: boolean = false) {
 }
 
 // Vehicle APIs
+export function getVehicleEffectiveStatus(v: Vehicle, targetDate: Date | string = new Date()): VehicleStatus {
+  // 1. If vehicle was grounded for safety defects or maintenance, it remains Grounded
+  if (v.currentStatus === 'Grounded') {
+    return 'Grounded';
+  }
+
+  // 2. Check if the vehicle has completed an inspection on the target calendar date
+  const cleanPlate = v.vehicleNo.replace(/\s+/g, '').toUpperCase();
+  const insp = memoryStore.inspections.find(i => 
+    i.vehicleNo.replace(/\s+/g, '').toUpperCase() === cleanPlate &&
+    isSameDay(i.timestamp, targetDate)
+  );
+
+  if (insp) {
+    return insp.overallResult === 'Pass' ? 'Ready' : 'Grounded';
+  }
+
+  // 3. New calendar day with no inspection performed yet: strictly Pending Inspection!
+  return 'Pending Inspection';
+}
+
 export function getVehicles(filters?: { branch?: string; status?: string; search?: string }): Vehicle[] {
-  let list = [...memoryStore.vehicles];
+  const today = new Date();
+  let list = memoryStore.vehicles.map(v => ({
+    ...v,
+    currentStatus: getVehicleEffectiveStatus(v, today),
+  }));
 
   if (filters?.branch && filters.branch !== 'ALL') {
     list = list.filter(v => (v.branch || '').toUpperCase() === filters.branch!.toUpperCase());
@@ -278,7 +303,12 @@ export function getVehicles(filters?: { branch?: string; status?: string; search
 
 export function getVehicleByPlate(plate: string): Vehicle | undefined {
   const clean = plate.replace(/\s+/g, '').toUpperCase();
-  return memoryStore.vehicles.find(v => v.vehicleNo.replace(/\s+/g, '').toUpperCase() === clean);
+  const v = memoryStore.vehicles.find(item => item.vehicleNo.replace(/\s+/g, '').toUpperCase() === clean);
+  if (!v) return undefined;
+  return {
+    ...v,
+    currentStatus: getVehicleEffectiveStatus(v, new Date()),
+  };
 }
 
 export function updateVehicle(vehicleNo: string, updates: Partial<Vehicle>): Vehicle | null {
@@ -1359,7 +1389,8 @@ export function mergeRestoredInspections(restoredList: InspectionRecord[]): { ad
 // Fleet Statistics
 export function getFleetStats(filters?: { branch?: string; date?: string; route?: string; truckCategory?: string; category?: string; tonnage?: string | number }) {
   const selectedBranch = filters?.branch && filters.branch !== 'ALL' ? filters.branch.toUpperCase() : null;
-  const selectedDate = filters?.date || new Date().toISOString().slice(0, 10);
+  const todayStr = getCalendarDateString(new Date());
+  const selectedDate = (filters?.date || todayStr).trim();
   const selectedRoute = filters?.route && filters.route !== 'ALL' ? filters.route.toLowerCase() : null;
   const selectedCategory = (filters?.truckCategory || filters?.category) && filters?.truckCategory !== 'ALL' && filters?.category !== 'ALL'
     ? (filters.truckCategory || filters.category)
@@ -1384,10 +1415,9 @@ export function getFleetStats(filters?: { branch?: string; date?: string; route?
 
   const totalFilteredVehicles = filteredVehicles.length;
 
-  // Filter inspections on the selected date
+  // Filter inspections on the selected date (strictly matching local calendar day YYYY-MM-DD)
   const dateInspections = memoryStore.inspections.filter(i => {
-    const inspDate = i.timestamp.slice(0, 10);
-    return inspDate === selectedDate;
+    return isSameDay(i.timestamp, selectedDate);
   });
 
   // Map of inspected vehicle plates on this date
@@ -1419,52 +1449,34 @@ export function getFleetStats(filters?: { branch?: string; date?: string; route?
     const plateKey = v.vehicleNo.replace(/\s+/g, '').toUpperCase();
     const insp = inspectedPlatesMap.get(plateKey);
 
-    const isToday = !filters?.date || isSameDay(selectedDate, new Date());
-
-    if (isToday) {
-      // Real-time live fleet overview: directly reflect current vehicle status and inspections
+    // Case 1: Inspection completed on selectedDate
+    if (insp) {
+      inspectedCount++;
+      depotStatsMap[br].inspected++;
+      if (insp.overallResult === 'Pass') {
+        readyVehicles++;
+        passedInspections++;
+        depotStatsMap[br].passed++;
+      } else {
+        groundedVehicles++;
+        failedInspections++;
+        depotStatsMap[br].defects++;
+      }
+    } else {
+      // Case 2: No inspection completed on selectedDate
+      // If the vehicle was previously grounded for unresolved defects, count as Grounded
       if (v.currentStatus === 'Grounded') {
         groundedVehicles++;
         failedInspections++;
         depotStatsMap[br].defects++;
-        if (insp) {
-          inspectedCount++;
-          depotStatsMap[br].inspected++;
-        }
-      } else if (v.currentStatus === 'Ready') {
-        readyVehicles++;
-        inspectedCount++;
-        passedInspections++;
-        depotStatsMap[br].inspected++;
-        depotStatsMap[br].passed++;
       } else {
-        // Pending Inspection
+        // A brand new day with no inspection yet: strictly Pending Inspection!
         pendingVehicles++;
         depotStatsMap[br].pending++;
-        pendingVehicleList.push(v);
-        if (insp) {
-          inspectedCount++;
-          depotStatsMap[br].inspected++;
-        }
-      }
-    } else {
-      // Historical date view: reflect the historical inspection records on that date
-      if (insp) {
-        inspectedCount++;
-        depotStatsMap[br].inspected++;
-        if (insp.overallResult === 'Pass') {
-          readyVehicles++;
-          passedInspections++;
-          depotStatsMap[br].passed++;
-        } else {
-          groundedVehicles++;
-          failedInspections++;
-          depotStatsMap[br].defects++;
-        }
-      } else {
-        pendingVehicles++;
-        depotStatsMap[br].pending++;
-        pendingVehicleList.push(v);
+        pendingVehicleList.push({
+          ...v,
+          currentStatus: 'Pending Inspection',
+        });
       }
     }
   });
