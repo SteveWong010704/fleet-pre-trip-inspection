@@ -148,7 +148,7 @@
         });
 
         const record = await submitInspection({
-          driverId: driver.loginId,
+          driverId: driver.employeeId || driver.loginId,
           driverName: driver.name,
           driverDesignation: driver.designation,
           driverDepot: driver.depot,
