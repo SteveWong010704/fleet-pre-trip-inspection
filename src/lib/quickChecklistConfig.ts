@@ -39,11 +39,17 @@ export const FEEDER_APAD_SAFETY_EQUIPMENT: QuickCheckQuestion[] = [
   { key: 'flashlight', label: '1x Heavy-Duty Flashlight / Torch', subtext: 'Functional battery & bright beam' },
   { key: 'reflective_line', label: '1x 50m Reflective Line (Rentetan Reflektif 50m)', subtext: 'Required under APAD heavy feeder standards' },
   { key: 'safety_cones', label: '5x Safety Warning Cones (Kon Keselamatan)', subtext: 'Statutory warning cones on board' },
+  { key: 'seatbelt', label: 'Seatbelts (Driver & Passenger)', subtext: 'Driver & passenger 3-point belts buckle securely, retract and lock on tug' },
 ];
 
 export const SMALL_TRUCK_SAFETY_EQUIPMENT: QuickCheckQuestion[] = [
   { key: 'fire_extinguisher', label: '1x Fire Extinguisher', subtext: 'Valid inspection tag, gauge needle in green' },
   { key: 'warning_triangle', label: '1x Emergency Warning Triangle', subtext: 'Reflective red folding triangle' },
+];
+
+export const FEEDER_CABIN_CHECKS: QuickCheckQuestion[] = [
+  { key: 'horn', label: 'Horn Function (Hon / Horn)', subtext: 'Clear, audible warning horn signal' },
+  { key: 'wiper', label: 'Windshield Wipers & Washer (Pengelap Cermin)', subtext: 'Wipers sweep cleanly without streaks, washer spray operational' },
 ];
 
 export function getCheckpointSystemChecks(itemId: string, isFeeder: boolean = false): QuickCheckQuestion[] {
@@ -52,6 +58,7 @@ export function getCheckpointSystemChecks(itemId: string, isFeeder: boolean = fa
   if (itemId === 'brake_system') return BRAKES_CHECKS;
   if (itemId === 'steering_handling') return STEERING_CHECKS;
   if (itemId === 'fluids_powertrain') return FLUIDS_CHECKS;
+  if (itemId === 'dashboard_warnings') return isFeeder ? FEEDER_CABIN_CHECKS : [];
   return [];
 }
 
