@@ -479,11 +479,70 @@ export async function dbLoadInspections(): Promise<InspectionRecord[]> {
 export async function dbSaveInspection(record: InspectionRecord): Promise<void> {
   if (!isMssqlConnected() || !pool) return;
   try {
+    // 1. Resolve DriverId to match EmployeeId in dbo.Drivers to satisfy FK_Inspections_Drivers
+    let effectiveDriverId = (record.driverId || '').trim();
+    if (effectiveDriverId) {
+      try {
+        const dCheck = await pool.request()
+          .input('ChkId', sql.NVarChar(50), effectiveDriverId)
+          .input('ChkPrefix', sql.NVarChar(50), effectiveDriverId.startsWith('SF') ? effectiveDriverId : `SF${effectiveDriverId}`)
+          .query`
+            SELECT TOP 1 EmployeeId FROM dbo.Drivers
+            WHERE EmployeeId = @ChkId OR EmployeeId = @ChkPrefix OR LoginId = @ChkId
+          `;
+
+        if (dCheck.recordset && dCheck.recordset.length > 0) {
+          effectiveDriverId = dCheck.recordset[0].EmployeeId;
+        } else {
+          // Driver not in dbo.Drivers yet; auto-insert to satisfy foreign key constraint
+          const autoEmpId = effectiveDriverId.startsWith('SF') ? effectiveDriverId : `SF${effectiveDriverId}`;
+          await pool.request()
+            .input('NewEmpId', sql.NVarChar(50), autoEmpId)
+            .input('NewLoginId', sql.NVarChar(50), effectiveDriverId)
+            .input('NewName', sql.NVarChar(150), record.driverName || 'DRIVER')
+            .input('NewDesig', sql.NVarChar(50), record.driverDesignation || 'SALESMAN')
+            .input('NewDepot', sql.NVarChar(50), record.driverDepot || record.vehicleBranch || 'BL')
+            .query`
+              IF NOT EXISTS (SELECT 1 FROM dbo.Drivers WHERE EmployeeId = @NewEmpId)
+              BEGIN
+                INSERT INTO dbo.Drivers (EmployeeId, LoginId, [Password], [Name], Designation, Depot, [Status])
+                VALUES (@NewEmpId, @NewLoginId, 'password', @NewName, @NewDesig, @NewDepot, 'A')
+              END
+            `;
+          effectiveDriverId = autoEmpId;
+        }
+      } catch (dErr) {
+        console.warn('[MSSQL] Auto-resolve driver foreign key check:', dErr);
+      }
+    }
+
+    // 2. Ensure vehicle exists in dbo.Vehicles to satisfy any potential FK_Inspections_Vehicles
+    const cleanPlate = (record.vehicleNo || '').replace(/\s+/g, '').toUpperCase();
+    if (cleanPlate) {
+      try {
+        await pool.request()
+          .input('VPlate', sql.NVarChar(50), cleanPlate)
+          .input('VBranch', sql.NVarChar(50), record.vehicleBranch || 'BL')
+          .input('VBrand', sql.NVarChar(100), record.vehicleBrand || 'HINO')
+          .input('VModel', sql.NVarChar(100), record.vehicleModel || 'Standard')
+          .input('VCat', sql.NVarChar(50), record.truckCategory || 'Small Truck')
+          .query`
+            IF NOT EXISTS (SELECT 1 FROM dbo.Vehicles WHERE VehicleNo = @VPlate)
+            BEGIN
+              INSERT INTO dbo.Vehicles (VehicleNo, Branch, Brand, Model, TruckCategory, CurrentStatus)
+              VALUES (@VPlate, @VBranch, @VBrand, @VModel, @VCat, 'Pending Inspection')
+            END
+          `;
+      } catch (vErr) {
+        console.warn('[MSSQL] Auto-resolve vehicle check:', vErr);
+      }
+    }
+
     const req = pool.request();
     req.input('InspectionId', sql.NVarChar(50), record.id);
     req.input('Timestamp', sql.DateTime2, new Date(record.timestamp || Date.now()));
     req.input('FormattedDate', sql.NVarChar(50), record.formattedDate || new Date().toLocaleString());
-    req.input('DriverId', sql.NVarChar(50), record.driverId || null);
+    req.input('DriverId', sql.NVarChar(50), effectiveDriverId || null);
     req.input('DriverName', sql.NVarChar(150), record.driverName || 'Driver');
     req.input('DriverDesignation', sql.NVarChar(50), record.driverDesignation || 'DRIVER');
     req.input('DriverDepot', sql.NVarChar(50), record.driverDepot || 'BL');
