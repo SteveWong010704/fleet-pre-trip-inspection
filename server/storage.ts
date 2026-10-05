@@ -170,7 +170,14 @@ export function initStore() {
               await dbBulkSaveDrivers(memoryStore.drivers);
             }
 
-            if (dbI.length > 0) memoryStore.inspections = dbI;
+            if (dbI.length > 0) {
+              memoryStore.inspections = dbI;
+            } else if (memoryStore.inspections.length > 0) {
+              console.log(`[MSSQL Auto-Sync] SQL Server Inspections table is empty, auto-pushing ${memoryStore.inspections.length} local inspections to SQL Server...`);
+              for (const insp of memoryStore.inspections) {
+                await dbSaveInspection(insp);
+              }
+            }
             if (dbA.length > 0) memoryStore.auditLogs = dbA;
             console.log(`[MSSQL Sync] Successfully synchronized with SQL Server: ${memoryStore.vehicles.length} Vehicles, ${memoryStore.drivers.length} Drivers, ${memoryStore.inspections.length} Inspections.`);
             saveStore(true);

@@ -666,7 +666,7 @@ async function startServer() {
         return res.status(401).json(result);
       }
       const token = signToken({
-        sub: result.driver.loginId,
+        sub: result.driver.employeeId || result.driver.loginId,
         name: result.driver.name,
         role: 'driver',
       });
