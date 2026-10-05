@@ -568,14 +568,7 @@ export const Checklist10Points: React.FC<Props> = ({
 
   // Get active system check list for current card
   const getSystemCheckList = () => {
-    if (currentItem.id === 'lights_indicators') return LIGHTS_CHECKS;
-    if (currentItem.id === 'brake_system') return BRAKES_CHECKS;
-    if (currentItem.id === 'steering_handling') return STEERING_CHECKS;
-    if (currentItem.id === 'fluids_powertrain') return FLUIDS_CHECKS;
-    if (currentItem.id === 'emergency_equipment') {
-      return isFeeder ? FEEDER_APAD_SAFETY_EQUIPMENT : SMALL_TRUCK_SAFETY_EQUIPMENT;
-    }
-    return [];
+    return getCheckpointSystemChecks(currentItem.id, isFeeder);
   };
 
   const activeCheckList = getSystemCheckList();
