@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Vehicle, Driver, InspectionCheckItem, InspectionPhoto, CheckStatus } from '../../types';
 import { getCurrentGps, applyWatermarkToImage } from '../../lib/cameraWatermark';
 import { getCheckpointRequiredPhotoCount, getCheckpointSlots } from '../../lib/checkpointConfig';
+import { CameraFrameOverlay } from './CameraFrameOverlay';
 import {
   LIGHTS_CHECKS,
   BRAKES_CHECKS,
@@ -1125,7 +1126,7 @@ export const Checklist10Points: React.FC<Props> = ({
 
               {/* Zoom Buttons */}
               {cameraActive && (
-                <div className="absolute top-2 right-2 flex flex-col gap-1">
+                <div className="absolute top-2 right-2 flex flex-col gap-1 z-20">
                   {[1, 2, 3].map((z) => (
                     <button
                       key={z}
@@ -1139,6 +1140,18 @@ export const Checklist10Points: React.FC<Props> = ({
                     </button>
                   ))}
                 </div>
+              )}
+
+              {/* Standardized Photo Taking Frame Marker & Guidance Overlay */}
+              {cameraActive && activeTarget && (
+                <CameraFrameOverlay
+                  itemId={activeTarget.id}
+                  slotIndex={activeTarget.slotIndex}
+                  slotName={activeTarget.slotName}
+                  isDefect={activeTarget.isDefect}
+                  vehicleBrand={vehicle.brand}
+                  vehicleModel={vehicle.model}
+                />
               )}
 
               {cameraError && (
