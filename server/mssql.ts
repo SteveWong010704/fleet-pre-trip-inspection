@@ -10,7 +10,7 @@ export function getMssqlConfig(): sql.config {
   const port = parseInt(process.env.MSSQL_PORT || '1433', 10);
   const user = process.env.MSSQL_USER || 'sa';
   const password = process.env.MSSQL_PASSWORD || 'StrongPassword123';
-  const database = process.env.MSSQL_DATABASE || 'FleetInspectionDB_Test';
+  const database = process.env.MSSQL_DATABASE || 'FleetInspectionDB';
   const encrypt = process.env.MSSQL_ENCRYPT === 'true';
 
   return {
