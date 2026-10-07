@@ -139,7 +139,52 @@ export function initStore() {
       memoryStore.settings = { publicBaseUrl: envPublicUrl };
       saveStore(true);
     }
-    console.log('[Storage Engine] Running in pure local JSON mode (data/fleet_store.json).');
+
+    // Connect to Microsoft SQL Server (SSMS) and synchronize data
+    if (process.env.DB_TYPE !== 'json') {
+      connectMssql().then(async (connected) => {
+        if (connected) {
+          try {
+            const [dbV, dbD, dbI, dbA] = await Promise.all([
+              dbLoadVehicles(),
+              dbLoadDrivers(),
+              dbLoadInspections(),
+              dbLoadAuditLogs(),
+            ]);
+            if (dbV.length > 0) {
+              memoryStore.vehicles = dbV;
+            } else if (memoryStore.vehicles.length > 0) {
+              console.log(`[MSSQL Auto-Sync] SQL Server Vehicles table is empty, auto-pushing ${memoryStore.vehicles.length} local vehicles to SQL Server...`);
+              await dbBulkSaveVehicles(memoryStore.vehicles);
+            }
+
+            if (dbD.length > 0) {
+              memoryStore.drivers = dbD;
+            } else if (memoryStore.drivers.length > 0) {
+              console.log(`[MSSQL Auto-Sync] SQL Server Drivers table is empty, auto-pushing ${memoryStore.drivers.length} local drivers to SQL Server...`);
+              await dbBulkSaveDrivers(memoryStore.drivers);
+            }
+
+            if (dbI.length > 0) {
+              memoryStore.inspections = dbI;
+            } else if (memoryStore.inspections.length > 0) {
+              console.log(`[MSSQL Auto-Sync] SQL Server Inspections table is empty, auto-pushing ${memoryStore.inspections.length} local inspections to SQL Server...`);
+              for (const insp of memoryStore.inspections) {
+                await dbSaveInspection(insp);
+              }
+            }
+            if (dbA.length > 0) memoryStore.auditLogs = dbA;
+            console.log(`[MSSQL Sync] Successfully synchronized with SQL Server: ${memoryStore.vehicles.length} Vehicles, ${memoryStore.drivers.length} Drivers, ${memoryStore.inspections.length} Inspections.`);
+            saveStore(true);
+            invalidateFleetStatsCache();
+          } catch (syncErr) {
+            console.error('[MSSQL Sync Error] Failed to populate cache from SQL Server:', syncErr);
+          }
+        }
+      }).catch(err => {
+        console.warn('[MSSQL Connection Warning] Startup connection failed, running on local cache:', err);
+      });
+    }
   } catch (err) {
     console.error('[Storage Error]', err);
   }
