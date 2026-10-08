@@ -1153,12 +1153,12 @@ export const Checklist10Points: React.FC<Props> = ({
                     title="Toggle Flashlight / Torch"
                   >
                     <Zap className={`w-3.5 h-3.5 ${torchActive ? 'fill-current text-slate-950' : 'text-amber-400'}`} />
-                    <span>{torchActive ? '⚡ 闪光灯 ON' : '🔦 开手电筒'}</span>
+                    <span>{torchActive ? '⚡ Flash ON' : '🔦 Flashlight'}</span>
                   </button>
                 ) : (
                   <div className="px-2 py-0.5 rounded-lg bg-amber-500/20 border border-amber-400/30 text-[10px] text-amber-300 font-bold flex items-center gap-1">
                     <Zap className="w-3 h-3 text-amber-400" />
-                    <span>凌晨作业请开手电筒</span>
+                    <span>Dawn operation: use flashlight</span>
                   </div>
                 )}
 
@@ -1176,7 +1176,7 @@ export const Checklist10Points: React.FC<Props> = ({
             <div className="bg-amber-400 text-slate-950 px-3 py-1 text-[11px] font-black flex items-center justify-between shadow-xs flex-shrink-0">
               <div className="flex items-center gap-1.5 truncate">
                 <Zap className="w-3.5 h-3.5 fill-current text-slate-950 flex-shrink-0" />
-                <span className="truncate">凌晨出车暗光：请开启闪光灯/强光照射后再拍！</span>
+                <span className="truncate">Early Dawn Dim Light: Please turn on flashlight / torch before photo!</span>
               </div>
               {torchSupported && (
                 <button
@@ -1184,7 +1184,7 @@ export const Checklist10Points: React.FC<Props> = ({
                   onClick={toggleTorch}
                   className="underline text-[10px] font-bold cursor-pointer hover:text-slate-800 ml-1 flex-shrink-0"
                 >
-                  {torchActive ? '关闭' : '一键开启'}
+                  {torchActive ? 'Turn Off' : 'Turn On'}
                 </button>
               )}
             </div>
@@ -1274,7 +1274,7 @@ export const Checklist10Points: React.FC<Props> = ({
                   className="text-[11px] text-slate-300 hover:text-white bg-slate-700 px-3 py-2 rounded-xl transition cursor-pointer flex items-center gap-1"
                 >
                   <Camera className="w-3.5 h-3.5" />
-                  <span>手机相机 (开闪光灯)</span>
+                  <span>Native Camera (Flash)</span>
                 </button>
 
                 {torchSupported && (
