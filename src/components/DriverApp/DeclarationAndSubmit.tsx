@@ -1,5 +1,5 @@
   import React, { useState, useEffect } from 'react';
-  import { Vehicle, Driver, InspectionCheckItem, InspectionPhoto, InspectionRecord } from '../../types';
+  import { Vehicle, Driver, InspectionCheckItem, InspectionPhoto, InspectionRecord, isSaturdayInspection } from '../../types';
   import { submitInspection } from '../../lib/api';
   import { getCurrentGps } from '../../lib/cameraWatermark';
   import { getCheckpointRequiredPhotoCount } from '../../lib/checkpointConfig';
@@ -68,13 +68,14 @@
       e.preventDefault();
       setSubmitError('');
 
-      // ENFORCE: Mandatory Photos according to checkpoint requirements (5 tyres, 4 body sides, 1 radiator, 1 fuel cap, etc.)
+      // ENFORCE: Mandatory Photos according to checkpoint requirements (Weekday 6 photos vs Saturday 15 photos)
+      const isSat = isSaturdayInspection();
       for (const item of items) {
-        const required = getCheckpointRequiredPhotoCount(item.id);
+        const required = getCheckpointRequiredPhotoCount(item.id, isSat);
         const count = photos.filter(p => p.itemId === item.id).length;
         if (count < required) {
           if (item.id === 'tires_wheels') {
-            setSubmitError(`Tires inspection requires 5 photos (4 tyres + 1 spare). Missing ${required - count} photo(s).`);
+            setSubmitError(`Tires inspection requires ${required} photos (${isSat ? '4 tyres + 1 spare' : 'Front-Left & Front-Right'}). Missing ${required - count} photo(s).`);
           } else if (item.id === 'body_passenger_doors') {
             setSubmitError(`Cargo & Body inspection requires 4 photos from 4 sides (Front, Rear, Left, Right). Missing ${required - count} photo(s).`);
           } else {

@@ -1,3 +1,5 @@
+import { isSaturdayInspection } from '../types';
+
 export interface CheckpointSlot {
   index: number;
   name: string;
@@ -77,10 +79,29 @@ export const CHECKPOINT_PHOTO_CONFIG: Record<string, CheckpointRequirement> = {
   },
 };
 
-export function getCheckpointRequiredPhotoCount(itemId: string): number {
+export const WEEKDAY_TIRE_SLOTS: CheckpointSlot[] = [
+  { index: 0, name: 'Front-Left Tyre', shortLabel: 'Front-L', description: 'Front Left Wheel & Tread' },
+  { index: 1, name: 'Front-Right Tyre', shortLabel: 'Front-R', description: 'Front Right Wheel & Tread' },
+];
+
+export const SATURDAY_TIRE_SLOTS: CheckpointSlot[] = [
+  { index: 0, name: 'Front-Left Tyre', shortLabel: 'Front-L', description: 'Front Left Wheel & Tread' },
+  { index: 1, name: 'Front-Right Tyre', shortLabel: 'Front-R', description: 'Front Right Wheel & Tread' },
+  { index: 2, name: 'Rear-Left Tyre', shortLabel: 'Rear-L', description: 'Rear Left Dual/Single Wheel' },
+  { index: 3, name: 'Rear-Right Tyre', shortLabel: 'Rear-R', description: 'Rear Right Dual/Single Wheel' },
+  { index: 4, name: 'Spare Tyre', shortLabel: 'Spare', description: 'Underbody / Mounted Spare Wheel' },
+];
+
+export function getCheckpointRequiredPhotoCount(itemId: string, isSaturday: boolean = isSaturdayInspection()): number {
+  if (itemId === 'tires_wheels') {
+    return isSaturday ? 5 : 2;
+  }
   return CHECKPOINT_PHOTO_CONFIG[itemId]?.minPhotos || 0;
 }
 
-export function getCheckpointSlots(itemId: string): CheckpointSlot[] | null {
+export function getCheckpointSlots(itemId: string, isSaturday: boolean = isSaturdayInspection()): CheckpointSlot[] | null {
+  if (itemId === 'tires_wheels') {
+    return isSaturday ? SATURDAY_TIRE_SLOTS : WEEKDAY_TIRE_SLOTS;
+  }
   return CHECKPOINT_PHOTO_CONFIG[itemId]?.slots || null;
 }
