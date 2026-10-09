@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Driver, Vehicle, InspectionCheckItem, InspectionPhoto, InspectionRecord, STANDARD_10_POINT_ITEMS, AdminUser } from './types';
+import { Driver, Vehicle, InspectionCheckItem, InspectionPhoto, InspectionRecord, STANDARD_10_POINT_ITEMS, getActiveInspectionItems, isSaturdayInspection, AdminUser } from './types';
 import { Navbar } from './components/Navbar';
 import { DriverAuth } from './components/DriverApp/DriverAuth';
 import { VehicleScanner } from './components/DriverApp/VehicleScanner';
@@ -56,7 +56,9 @@ export default function App() {
       ? veh.truckCategory === 'Feeder' || String(veh.model || '').toLowerCase().includes('feeder')
       : false;
 
-    return STANDARD_10_POINT_ITEMS.map((item) => ({
+    const activeItems = getActiveInspectionItems(isSaturdayInspection());
+
+    return activeItems.map((item) => ({
       ...item,
       status: 'Pass' as const,
       dashboardChecks:
@@ -81,8 +83,9 @@ export default function App() {
 
   const handleProceedToDeclaration = () => {
     // Check if every checkpoint has satisfied its photo requirement
+    const isSaturday = isSaturdayInspection();
     for (const item of checklistItems) {
-      const required = getCheckpointRequiredPhotoCount(item.id);
+      const required = getCheckpointRequiredPhotoCount(item.id, isSaturday);
       const count = photos.filter(p => p.itemId === item.id).length;
       if (count < required) {
         setPhotoAlertMessage(`Checkpoint #${item.code} (${item.title}) requires ${required} photo(s). Currently taken: ${count}`);
@@ -157,6 +160,10 @@ export default function App() {
     }
 
     setActiveDriver(driver);
+    if (selectedVehicle) {
+      setChecklistItems(createInitialChecklist(selectedVehicle));
+      setPhotos([]);
+    }
     setDriverStep(selectedVehicle ? 'checklist' : 'scanner');
   };
 

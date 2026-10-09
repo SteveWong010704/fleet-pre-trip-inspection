@@ -179,7 +179,59 @@ export interface FleetStats {
   pendingVehicleList?: Vehicle[];
 }
 
-export const STANDARD_10_POINT_ITEMS: Omit<InspectionCheckItem, 'status' | 'defectNote' | 'photoUrl'>[] = [
+// ============================================================================
+// INSPECTION CHECKPOINTS: WEEKDAY (MONDAY - FRIDAY: 6 PHOTOS) VS SATURDAY (FULL SET)
+// ============================================================================
+
+// 1. WEEKDAY ROUTINE (MONDAY - FRIDAY): EXACTLY 5 CHECKPOINTS, 6 PHOTOS
+// Order: Front Tyres (L&R: 2 photos) -> Engine Oil (1) -> Radiator (1) -> Diesel Cap (1) -> Meter Dashboard (1, LAST after engine start)
+export const WEEKDAY_6_POINT_ITEMS: Omit<InspectionCheckItem, 'status' | 'defectNote' | 'photoUrl'>[] = [
+  {
+    id: 'tires_wheels',
+    code: 1,
+    category: 'Chassis & Rolling Gear',
+    title: 'Front Tires (Front-Left & Front-Right: 2 Photos)',
+    subtext: 'Mandatory 2 photos: Front-Left and Front-Right tires. Check inflation pressure, tread depth, and wheel nuts.',
+  },
+  {
+    id: 'fluids_powertrain',
+    code: 2,
+    category: 'Engine & Fluids',
+    title: 'Engine Oil Dipstick Level (Photo Required)',
+    subtext: 'Pull dipstick, wipe clean, re-insert and inspect oil level between MIN and MAX notches.',
+  },
+  {
+    id: 'radiator_coolant',
+    code: 3,
+    category: 'Engine & Cooling',
+    title: 'Radiator & Coolant Level (Photo Required)',
+    subtext: 'Inspect radiator core, coolant expansion tank fluid level, cap tightness, and check for hose leaks.',
+  },
+  {
+    id: 'diesel_fuel_cap',
+    code: 4,
+    category: 'Fuel & Security',
+    title: 'Diesel Fuel Tank & Cap (Photo Required)',
+    subtext: 'Photo of diesel tank and filler neck. Verify cap is firmly locked and no diesel leaks around tank.',
+  },
+  {
+    id: 'dashboard_warnings',
+    code: 5,
+    category: 'Instruments & Electronics',
+    title: 'Meter & Dashboard (Start Engine, Take Photo)',
+    subtext: 'FINAL STEP: Turn key ON, start engine, photograph instrument cluster, odometer, and warning lights.',
+    dashboardChecks: {
+      engineLightOff: true,
+      doubleSignalOk: true,
+      batteryLightOff: true,
+      oilLightOff: true,
+    },
+  },
+];
+
+// 2. SATURDAY AUDIT (WEEKLY DEEP AUDIT: FULL SET WITH DASHBOARD LAST)
+// Items 1-9 cover exterior, rolling gear, body, fluids, emergency. Item 10 is Meter Dashboard (LAST).
+export const SATURDAY_FULL_ITEMS: Omit<InspectionCheckItem, 'status' | 'defectNote' | 'photoUrl'>[] = [
   {
     id: 'tires_wheels',
     code: 1,
@@ -216,11 +268,39 @@ export const STANDARD_10_POINT_ITEMS: Omit<InspectionCheckItem, 'status' | 'defe
     subtext: 'Inspect radiator tank, coolant reservoir fluid level, cap condition, hose connections, and check for leaks.',
   },
   {
-    id: 'dashboard_warnings',
+    id: 'fluids_powertrain',
     code: 6,
+    category: 'Engine & Fluids',
+    title: 'Engine Oil & Powertrain (Engine Oil Photo Required)',
+    subtext: 'Mandatory photo of engine oil dipstick & level. Verify battery terminal condition, transmission, and fluid leaks.',
+  },
+  {
+    id: 'diesel_fuel_cap',
+    code: 7,
+    category: 'Fuel & Security',
+    title: 'Diesel Fuel Tank & Cap (Photo Required)',
+    subtext: 'Photo of diesel fuel filler cap and tank seal. Ensure fuel cap is tightly locked, seal intact, and no diesel leakage.',
+  },
+  {
+    id: 'emergency_equipment',
+    code: 8,
+    category: 'Safety & Emergency',
+    title: 'Emergency Equipment',
+    subtext: 'Fire extinguisher validity and pressure pin, emergency triangle, first aid kit, and seatbelts.',
+  },
+  {
+    id: 'body_passenger_doors',
+    code: 9,
+    category: 'Cargo & Body (4 Sides Walkaround)',
+    title: 'Cargo & Body (4 Photos: Front, Back, Left, Right)',
+    subtext: 'Mandatory 4 photos covering all 4 sides of the lorry (Front, Rear, Left, Right). Pinch/zoom camera enabled.',
+  },
+  {
+    id: 'dashboard_warnings',
+    code: 10,
     category: 'Instruments & Electronics',
-    title: 'Dashboard & Warnings (Cluster Checklist Required)',
-    subtext: 'Upload cluster photo, then confirm instrument status: Engine Check light, Double Signal, Battery & Oil lamps.',
+    title: 'Meter & Dashboard (Start Engine, Take Photo)',
+    subtext: 'FINAL STEP: Turn key ON, start engine, photograph instrument cluster, odometer, and warning lights.',
     dashboardChecks: {
       engineLightOff: true,
       doubleSignalOk: true,
@@ -228,35 +308,25 @@ export const STANDARD_10_POINT_ITEMS: Omit<InspectionCheckItem, 'status' | 'defe
       oilLightOff: true,
     },
   },
-  {
-    id: 'emergency_equipment',
-    code: 7,
-    category: 'Safety & Emergency',
-    title: 'Emergency Equipment',
-    subtext: 'Fire extinguisher validity and pressure pin, emergency triangle, first aid kit, and seatbelts.',
-  },
-  {
-    id: 'body_passenger_doors',
-    code: 8,
-    category: 'Cargo & Body (4 Sides Walkaround)',
-    title: 'Cargo & Body (4 Photos: Front, Back, Left, Right)',
-    subtext: 'Mandatory 4 photos covering all 4 sides of the lorry (Front, Rear, Left, Right). Pinch/zoom camera enabled.',
-  },
-  {
-    id: 'diesel_fuel_cap',
-    code: 9,
-    category: 'Fuel & Security',
-    title: 'Diesel Fuel Tank & Cap (Photo Required)',
-    subtext: 'Photo of diesel fuel filler cap and tank seal. Ensure fuel cap is tightly locked, seal intact, and no diesel leakage.',
-  },
-  {
-    id: 'fluids_powertrain',
-    code: 10,
-    category: 'Engine & Fluids',
-    title: 'Engine Oil & Powertrain (Engine Oil Photo Required)',
-    subtext: 'Mandatory photo of engine oil dipstick & level. Verify battery terminal condition, transmission, and fluid leaks.',
-  },
 ];
+
+export function isSaturdayInspection(): boolean {
+  if (typeof window !== 'undefined') {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('mode') === 'saturday') return true;
+      if (params.get('mode') === 'weekday') return false;
+    } catch {}
+  }
+  return new Date().getDay() === 6;
+}
+
+export function getActiveInspectionItems(isSaturday: boolean = isSaturdayInspection()): Omit<InspectionCheckItem, 'status' | 'defectNote' | 'photoUrl'>[] {
+  return isSaturday ? SATURDAY_FULL_ITEMS : WEEKDAY_6_POINT_ITEMS;
+}
+
+// Backward-compatible alias
+export const STANDARD_10_POINT_ITEMS = SATURDAY_FULL_ITEMS;
 
 export interface SafetyEquipmentSpec {
   id: string;

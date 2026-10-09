@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Vehicle, Driver, InspectionCheckItem, InspectionPhoto, CheckStatus } from '../../types';
+import { Vehicle, Driver, InspectionCheckItem, InspectionPhoto, CheckStatus, isSaturdayInspection } from '../../types';
 import { getCurrentGps, applyWatermarkToImage } from '../../lib/cameraWatermark';
 import { getCheckpointRequiredPhotoCount, getCheckpointSlots } from '../../lib/checkpointConfig';
 import { CameraFrameOverlay } from './CameraFrameOverlay';
@@ -31,6 +31,7 @@ import {
   ZoomOut,
   AlertCircle,
   Check,
+  Zap,
 } from 'lucide-react';
 
 interface Props {
@@ -96,6 +97,8 @@ export const Checklist10Points: React.FC<Props> = ({
   const [cameraActive, setCameraActive] = useState<boolean>(false);
   const [cameraLoading, setCameraLoading] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string>('');
+  const [torchSupported, setTorchSupported] = useState<boolean>(false);
+  const [torchActive, setTorchActive] = useState<boolean>(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const nativeCameraInputRef = useRef<HTMLInputElement | null>(null);
@@ -161,6 +164,23 @@ export const Checklist10Points: React.FC<Props> = ({
     }
     setCameraActive(false);
     setCameraLoading(false);
+    setTorchActive(false);
+    setTorchSupported(false);
+  };
+
+  const toggleTorch = async () => {
+    if (!streamRef.current) return;
+    const videoTrack = streamRef.current.getVideoTracks()[0];
+    if (!videoTrack) return;
+    try {
+      const nextState = !torchActive;
+      await videoTrack.applyConstraints({
+        advanced: [{ torch: nextState } as any],
+      });
+      setTorchActive(nextState);
+    } catch (err) {
+      console.warn('Failed to toggle flashlight / torch:', err);
+    }
   };
 
   const applyZoomToTrack = async (targetZoom: number) => {
@@ -207,6 +227,27 @@ export const Checklist10Points: React.FC<Props> = ({
       });
 
       streamRef.current = stream;
+
+      // Query and auto-enable flashlight / torch for dawn / night inspection
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        const capabilities: any = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+        if (capabilities.torch) {
+          setTorchSupported(true);
+          try {
+            await videoTrack.applyConstraints({
+              advanced: [{ torch: true } as any],
+            });
+            setTorchActive(true);
+          } catch {
+            setTorchActive(false);
+          }
+        } else {
+          setTorchSupported(false);
+          setTorchActive(false);
+        }
+      }
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
@@ -486,11 +527,14 @@ export const Checklist10Points: React.FC<Props> = ({
     updateItemField(itemId, patch);
   };
 
-  // The active checkpoint item for the current card (0 to 9)
+  // Routine day check
+  const isSaturday = isSaturdayInspection();
+
+  // The active checkpoint item for the current card (0 to items.length - 1)
   const currentItem = items[currentCardIndex] || items[0];
-  const requiredPhotoCount = getCheckpointRequiredPhotoCount(currentItem.id);
+  const requiredPhotoCount = getCheckpointRequiredPhotoCount(currentItem.id, isSaturday);
   const itemPhotos = photos.filter((p) => p.itemId === currentItem.id);
-  const slots = getCheckpointSlots(currentItem.id);
+  const slots = getCheckpointSlots(currentItem.id, isSaturday);
 
   // Checkpoint #6: Dashboard checks default object
   const currentDashChecks = currentItem.dashboardChecks || {
@@ -562,7 +606,7 @@ export const Checklist10Points: React.FC<Props> = ({
   const isCardCompleted = (idx: number) => {
     const it = items[idx];
     if (!it) return false;
-    const req = getCheckpointRequiredPhotoCount(it.id);
+    const req = getCheckpointRequiredPhotoCount(it.id, isSaturday);
     const count = photos.filter((p) => p.itemId === it.id).length;
     return count >= req;
   };
@@ -578,7 +622,7 @@ export const Checklist10Points: React.FC<Props> = ({
     <div className="max-w-2xl mx-auto h-[calc(100dvh-5.5rem)] min-h-[580px] max-h-[820px] flex flex-col justify-between overflow-hidden">
       {/* ================= TOP CARD DECK STEPPER (COMPACT) ================= */}
       <div className="bg-white border border-slate-200 rounded-2xl p-2.5 sm:p-3 shadow-xs text-slate-800 space-y-1.5 flex-shrink-0">
-        {/* Header & Percentage */}
+        {/* Routine Banner & Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <span className="w-6 h-6 rounded-lg bg-blue-600 text-white font-black text-xs flex items-center justify-center shadow-xs">
@@ -586,7 +630,7 @@ export const Checklist10Points: React.FC<Props> = ({
             </span>
             <div className="flex items-baseline space-x-1.5 truncate">
               <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
-                Card {currentCardIndex + 1}/10:
+                Card {currentCardIndex + 1}/{items.length}:
               </span>
               <h2 className="text-xs sm:text-sm font-black text-slate-900 truncate">
                 {currentItem.title}
@@ -596,17 +640,27 @@ export const Checklist10Points: React.FC<Props> = ({
 
           <div className="flex items-center space-x-2">
             <span className="text-[10px] font-mono font-bold text-blue-600 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md">
-              {Math.round(((currentCardIndex + 1) / 10) * 100)}%
+              {Math.round(((currentCardIndex + 1) / items.length) * 100)}%
             </span>
             <span className="text-[10px] text-slate-400 font-mono font-bold">{vehicle.vehicleNo}</span>
           </div>
+        </div>
+
+        {/* Routine Type Label */}
+        <div className="flex items-center justify-between text-[10px] font-mono font-bold px-1">
+          <span className="text-slate-500">
+            {isSaturday ? '📅 Saturday Deep Audit (Full Set • 15 Photos)' : '📅 Mon - Fri Routine (5 Points • 6 Photos • Meter Last)'}
+          </span>
+          <span className="text-slate-400">
+            {currentCardIndex + 1} of {items.length} Checkpoints
+          </span>
         </div>
 
         {/* Progress Bar */}
         <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
           <div
             className="bg-blue-600 h-full rounded-full transition-all duration-300"
-            style={{ width: `${((currentCardIndex + 1) / 10) * 100}%` }}
+            style={{ width: `${((currentCardIndex + 1) / items.length) * 100}%` }}
           />
         </div>
 
@@ -1066,7 +1120,7 @@ export const Checklist10Points: React.FC<Props> = ({
             </>
           ) : (
             <>
-              <span>Complete 10 Cards & Proceed</span>
+              <span>Complete All ({items.length}) Checkpoints & Proceed</span>
               <ArrowRight className="w-4 h-4" />
             </>
           )}
@@ -1085,13 +1139,54 @@ export const Checklist10Points: React.FC<Props> = ({
                 </div>
                 <h4 className="text-xs font-black truncate">{activeTarget.title}</h4>
               </div>
-              <button
-                type="button"
-                onClick={closeCameraModal}
-                className="p-1.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-slate-300 hover:text-white cursor-pointer flex-shrink-0"
-              >
-                <X className="w-4 h-4" />
-              </button>
+
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {torchSupported ? (
+                  <button
+                    type="button"
+                    onClick={toggleTorch}
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1 transition cursor-pointer border ${
+                      torchActive
+                        ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-md shadow-amber-400/40 animate-pulse'
+                        : 'bg-slate-700 hover:bg-slate-600 text-amber-300 border-amber-400/30'
+                    }`}
+                    title="Toggle Flashlight / Torch"
+                  >
+                    <Zap className={`w-3.5 h-3.5 ${torchActive ? 'fill-current text-slate-950' : 'text-amber-400'}`} />
+                    <span>{torchActive ? '⚡ Flash ON' : '🔦 Flashlight'}</span>
+                  </button>
+                ) : (
+                  <div className="px-2 py-0.5 rounded-lg bg-amber-500/20 border border-amber-400/30 text-[10px] text-amber-300 font-bold flex items-center gap-1">
+                    <Zap className="w-3 h-3 text-amber-400" />
+                    <span>Dawn operation: use flashlight</span>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={closeCameraModal}
+                  className="p-1.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-slate-300 hover:text-white cursor-pointer flex-shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Flashlight Notification Banner for Early Dawn Operations */}
+            <div className="bg-amber-400 text-slate-950 px-3 py-1 text-[11px] font-black flex items-center justify-between shadow-xs flex-shrink-0">
+              <div className="flex items-center gap-1.5 truncate">
+                <Zap className="w-3.5 h-3.5 fill-current text-slate-950 flex-shrink-0" />
+                <span className="truncate">Early Dawn Dim Light: Please turn on flashlight / torch before photo!</span>
+              </div>
+              {torchSupported && (
+                <button
+                  type="button"
+                  onClick={toggleTorch}
+                  className="underline text-[10px] font-bold cursor-pointer hover:text-slate-800 ml-1 flex-shrink-0"
+                >
+                  {torchActive ? 'Turn Off' : 'Turn On'}
+                </button>
+              )}
             </div>
 
             {/* Live Camera Viewport with FIXED Dimensions */}
@@ -1151,6 +1246,7 @@ export const Checklist10Points: React.FC<Props> = ({
                   isDefect={activeTarget.isDefect}
                   vehicleBrand={vehicle.brand}
                   vehicleModel={vehicle.model}
+                  torchActive={torchActive}
                 />
               )}
 
@@ -1171,13 +1267,31 @@ export const Checklist10Points: React.FC<Props> = ({
 
             {/* Modal Footer Controls */}
             <div className="p-3 bg-slate-800 border-t border-slate-700 flex items-center justify-between gap-2 flex-shrink-0">
-              <button
-                type="button"
-                onClick={() => nativeCameraInputRef.current?.click()}
-                className="text-[11px] text-slate-300 hover:text-white bg-slate-700 px-3 py-2 rounded-xl transition cursor-pointer"
-              >
-                Device Camera / File
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => nativeCameraInputRef.current?.click()}
+                  className="text-[11px] text-slate-300 hover:text-white bg-slate-700 px-3 py-2 rounded-xl transition cursor-pointer flex items-center gap-1"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>Native Camera (Flash)</span>
+                </button>
+
+                {torchSupported && (
+                  <button
+                    type="button"
+                    onClick={toggleTorch}
+                    className={`p-2 rounded-xl border transition cursor-pointer ${
+                      torchActive
+                        ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-sm'
+                        : 'bg-slate-700 text-amber-300 border-amber-400/30 hover:bg-slate-600'
+                    }`}
+                    title="Toggle Flashlight / Torch"
+                  >
+                    <Zap className={`w-4 h-4 ${torchActive ? 'fill-current text-slate-950' : 'text-amber-400'}`} />
+                  </button>
+                )}
+              </div>
 
               <button
                 type="button"
