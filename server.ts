@@ -376,6 +376,190 @@ async function startServer() {
     })
   );
 
+  // Smart photo resolver & fallback for /uploads:
+  // If static file was not found directly in uploads/ (e.g. after database restore, slight naming variation, or pruned from active DB):
+  // Search the backup archives (getBackupRootDir()) and uploads directory variations, auto-repair uploads/ on disk, and serve the image!
+  app.use('/uploads', (req, res, next) => {
+    try {
+      const decodedPath = decodeURIComponent(req.path).replace(/\\/g, '/').replace(/^\/+/, '');
+      if (!decodedPath || !/\.(jpe?g|png|webp|gif|svg)$/i.test(decodedPath)) {
+        return next();
+      }
+
+      // 1. Direct check in uploadsDir (handles potential Windows/Linux path separator issues)
+      const directPath = path.join(uploadsDir, ...decodedPath.split('/'));
+      if (fs.existsSync(directPath) && fs.statSync(directPath).isFile()) {
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.sendFile(directPath);
+      }
+
+      const rootBackupDir = getBackupRootDir();
+      const pathSegments = decodedPath.split('/').filter(Boolean);
+      // Example path: "2026-10-09/VFH2715/01_Tires_Wheels.jpg"
+      // segments: ["2026-10-09", "VFH2715", "01_Tires_Wheels.jpg"]
+      let targetDate = '';
+      let targetPlate = '';
+      const targetFilename = pathSegments[pathSegments.length - 1];
+
+      for (const seg of pathSegments) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(seg)) {
+          targetDate = seg;
+        } else if (seg !== targetFilename && !targetPlate) {
+          targetPlate = seg.toUpperCase().replace(/[^A-Z0-9_-]/g, '_');
+        }
+      }
+
+      // Candidate paths to search across rootBackupDir and uploadsDir
+      const candidatePaths: string[] = [];
+
+      if (targetDate) {
+        const dayFolder = path.join(rootBackupDir, `backup_${targetDate}`);
+        if (targetPlate) {
+          candidatePaths.push(
+            path.join(dayFolder, 'upload', targetDate, targetPlate, targetFilename),
+            path.join(dayFolder, 'photos', targetPlate, targetFilename),
+            path.join(dayFolder, targetPlate, targetFilename),
+            path.join(uploadsDir, targetDate, targetPlate, targetFilename)
+          );
+        }
+        candidatePaths.push(
+          path.join(dayFolder, 'upload', targetDate, targetFilename),
+          path.join(dayFolder, 'photos', targetFilename),
+          path.join(dayFolder, targetFilename)
+        );
+      }
+
+      // Check candidate paths first
+      for (const cp of candidatePaths) {
+        if (fs.existsSync(cp) && fs.statSync(cp).isFile()) {
+          try {
+            const destPath = path.join(uploadsDir, ...decodedPath.split('/'));
+            fs.mkdirSync(path.dirname(destPath), { recursive: true });
+            if (!fs.existsSync(destPath)) {
+              fs.copyFileSync(cp, destPath);
+            }
+          } catch {}
+          res.setHeader('Content-Type', 'image/jpeg');
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          return res.sendFile(cp);
+        }
+      }
+
+      // Check for code prefix variations in the plate directory
+      // (e.g. searching for 01_Tires_Wheels.jpg when file is 01_Tires_Wheels_Slot1_Front_Left.jpg)
+      const codeMatch = targetFilename.match(/^(\d{2})_/);
+      const codePrefix = codeMatch ? codeMatch[1] : '';
+
+      const isRadReq = targetFilename.toLowerCase().includes('radiator') || targetFilename.toLowerCase().includes('coolant') || codePrefix === '05' || codePrefix === '03';
+      const isDieselReq = targetFilename.toLowerCase().includes('diesel') || targetFilename.toLowerCase().includes('fuel') || targetFilename.toLowerCase().includes('cap') || codePrefix === '09' || codePrefix === '07' || codePrefix === '04';
+
+      const searchInFolder = (dir: string): string | null => {
+        if (!fs.existsSync(dir)) return null;
+        try {
+          const files = fs.readdirSync(dir);
+          // Exact filename case-insensitive match
+          const exactCi = files.find(f => f.toLowerCase() === targetFilename.toLowerCase());
+          if (exactCi) return path.join(dir, exactCi);
+
+          // If codePrefix exists, match files starting with that code prefix
+          if (codePrefix) {
+            const prefixMatch = files.find(f => f.startsWith(`${codePrefix}_`));
+            if (prefixMatch) return path.join(dir, prefixMatch);
+          }
+
+          // Keyword fallbacks for Checkpoint 5 (Radiator) and Checkpoint 9 (Diesel Cap)
+          if (isRadReq) {
+            const radMatch = files.find(f => {
+              const lower = f.toLowerCase();
+              return lower.includes('radiator') || lower.includes('coolant') || f.startsWith('05_') || f.startsWith('03_');
+            });
+            if (radMatch) return path.join(dir, radMatch);
+          }
+
+          if (isDieselReq) {
+            const dieselMatch = files.find(f => {
+              const lower = f.toLowerCase();
+              return lower.includes('diesel') || lower.includes('fuel') || lower.includes('cap') || f.startsWith('09_') || f.startsWith('07_') || f.startsWith('04_');
+            });
+            if (dieselMatch) return path.join(dir, dieselMatch);
+          }
+        } catch {}
+        return null;
+      };
+
+      if (targetDate && targetPlate) {
+        const dayFolder = path.join(rootBackupDir, `backup_${targetDate}`);
+        const foldersToSearch = [
+          path.join(uploadsDir, targetDate, targetPlate),
+          path.join(dayFolder, 'upload', targetDate, targetPlate),
+          path.join(dayFolder, 'photos', targetPlate),
+          path.join(dayFolder, targetPlate),
+        ];
+        for (const dir of foldersToSearch) {
+          const found = searchInFolder(dir);
+          if (found && fs.statSync(found).isFile()) {
+            try {
+              const destPath = path.join(uploadsDir, ...decodedPath.split('/'));
+              fs.mkdirSync(path.dirname(destPath), { recursive: true });
+              if (!fs.existsSync(destPath)) {
+                fs.copyFileSync(found, destPath);
+              }
+            } catch {}
+            res.setHeader('Content-Type', 'image/jpeg');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            return res.sendFile(found);
+          }
+        }
+      }
+
+      // Recursive search inside targetDate backup by filename or prefix
+      const searchRecursive = (dir: string, maxDepth = 4): string | null => {
+        if (!fs.existsSync(dir) || maxDepth <= 0) return null;
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isFile()) {
+              if (entry.name.toLowerCase() === targetFilename.toLowerCase()) {
+                return full;
+              }
+              if (codePrefix && targetPlate && full.toUpperCase().includes(targetPlate) && entry.name.startsWith(`${codePrefix}_`)) {
+                return full;
+              }
+            } else if (entry.isDirectory()) {
+              const resFile = searchRecursive(full, maxDepth - 1);
+              if (resFile) return resFile;
+            }
+          }
+        } catch {}
+        return null;
+      };
+
+      if (targetDate) {
+        const dayFolder = path.join(rootBackupDir, `backup_${targetDate}`);
+        const found = searchRecursive(dayFolder);
+        if (found) {
+          try {
+            const destPath = path.join(uploadsDir, ...decodedPath.split('/'));
+            fs.mkdirSync(path.dirname(destPath), { recursive: true });
+            if (!fs.existsSync(destPath)) {
+              fs.copyFileSync(found, destPath);
+            }
+          } catch {}
+          res.setHeader('Content-Type', 'image/jpeg');
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          return res.sendFile(found);
+        }
+      }
+
+      return next();
+    } catch (err) {
+      console.warn('[Uploads Resolver Warning]', err);
+      return next();
+    }
+  });
+
   // Apply general API limiter to all /api routes
   app.use('/api', generalApiLimiter);
 
@@ -628,11 +812,16 @@ async function startServer() {
   // Update driver (Admin only)
   app.post('/api/drivers/update', requireAdmin, (req, res) => {
     try {
-      const { identifier, updates } = req.body;
-      if (!identifier) {
+      const { identifier, updates, originalIdentifier, originalEmployeeId, originalLoginId } = req.body;
+      const targetId = originalIdentifier || originalEmployeeId || originalLoginId || identifier;
+      if (!targetId) {
         return res.status(400).json({ success: false, message: 'Driver identifier is required' });
       }
-      const updated = updateDriver(identifier, updates);
+      const updated = updateDriver(targetId, updates || {}, {
+        originalEmployeeId,
+        originalLoginId,
+        fallbackIdentifier: identifier,
+      });
       if (!updated) {
         return res.status(404).json({ success: false, message: 'Driver not found' });
       }

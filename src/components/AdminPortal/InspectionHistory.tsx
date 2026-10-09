@@ -29,6 +29,7 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  Camera,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -62,6 +63,25 @@ export const InspectionHistory: React.FC = () => {
   
   const [activeRecord, setActiveRecord] = useState<InspectionRecord | null>(null);
   const [previewPhoto, setPreviewPhoto] = useState<InspectionPhoto | null>(null);
+
+  const handlePhotoImgError = (e: React.SyntheticEvent<HTMLImageElement>, photoUrl?: string, itemCode?: number | string) => {
+    const img = e.currentTarget;
+    if (img.dataset.fallbackTried === '2') return;
+
+    const attempts = Number(img.dataset.fallbackTried || 0);
+    img.dataset.fallbackTried = String(attempts + 1);
+
+    if (!activeRecord) return;
+    const dateStr = activeRecord.timestamp ? activeRecord.timestamp.slice(0, 10) : '';
+    const cleanPlate = (activeRecord.vehicleNo || '').trim().toUpperCase().replace(/[^a-zA-Z0-9]/g, '_');
+    const baseName = (photoUrl || img.src).split('/').pop() || '';
+
+    if (attempts === 0 && dateStr && cleanPlate && baseName) {
+      img.src = `/api/backup/photos/${dateStr}/${cleanPlate}/${baseName}`;
+    } else if (attempts === 1 && dateStr && baseName) {
+      img.src = `/api/backup/photos/${dateStr}/${baseName}`;
+    }
+  };
 
   useEffect(() => {
     loadInspections();
@@ -1341,7 +1361,12 @@ export const InspectionHistory: React.FC = () => {
                               onClick={() => setPreviewPhoto(photo)}
                               className="relative group cursor-pointer rounded-lg overflow-hidden border border-slate-200"
                             >
-                              <img src={photo.url} alt={slot.name} className="w-full h-24 object-cover" />
+                              <img
+                                src={photo.url}
+                                alt={slot.name}
+                                className="w-full h-24 object-cover"
+                                onError={(e) => handlePhotoImgError(e, photo.url, 1)}
+                              />
                               <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white">
                                 <Maximize2 className="w-5 h-5 drop-shadow" />
                               </div>
@@ -1432,7 +1457,12 @@ export const InspectionHistory: React.FC = () => {
                               onClick={() => setPreviewPhoto(photo)}
                               className="relative group cursor-pointer rounded-lg overflow-hidden border border-slate-200"
                             >
-                              <img src={photo.url} alt={slot.name} className="w-full h-24 object-cover" />
+                              <img
+                                src={photo.url}
+                                alt={slot.name}
+                                className="w-full h-24 object-cover"
+                                onError={(e) => handlePhotoImgError(e, photo.url, 8)}
+                              />
                               <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white">
                                 <Maximize2 className="w-5 h-5 drop-shadow" />
                               </div>
@@ -1499,7 +1529,12 @@ export const InspectionHistory: React.FC = () => {
                           onClick={() => setPreviewPhoto(dashPhoto)}
                           className="relative group cursor-pointer rounded-xl overflow-hidden border border-slate-200 h-32"
                         >
-                          <img src={dashPhoto.url} alt="Cluster" className="w-full h-full object-cover" />
+                          <img
+                            src={dashPhoto.url}
+                            alt="Cluster"
+                            className="w-full h-full object-cover"
+                            onError={(e) => handlePhotoImgError(e, dashPhoto.url, 6)}
+                          />
                           <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white">
                             <Maximize2 className="w-5 h-5 drop-shadow" />
                           </div>
@@ -1602,7 +1637,12 @@ export const InspectionHistory: React.FC = () => {
                         onClick={() => setPreviewPhoto(radPhoto)}
                         className="relative group cursor-pointer rounded-xl overflow-hidden border border-slate-200 h-28"
                       >
-                        <img src={radPhoto.url} alt="Radiator" className="w-full h-full object-cover" />
+                        <img
+                          src={radPhoto.url}
+                          alt="Radiator"
+                          className="w-full h-full object-cover"
+                          onError={(e) => handlePhotoImgError(e, radPhoto.url, 5)}
+                        />
                         <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white">
                           <Maximize2 className="w-5 h-5 drop-shadow" />
                         </div>
@@ -1645,7 +1685,12 @@ export const InspectionHistory: React.FC = () => {
                         onClick={() => setPreviewPhoto(capPhoto)}
                         className="relative group cursor-pointer rounded-xl overflow-hidden border border-slate-200 h-28"
                       >
-                        <img src={capPhoto.url} alt="Diesel Cap" className="w-full h-full object-cover" />
+                        <img
+                          src={capPhoto.url}
+                          alt="Diesel Cap"
+                          className="w-full h-full object-cover"
+                          onError={(e) => handlePhotoImgError(e, capPhoto.url, 9)}
+                        />
                         <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white">
                           <Maximize2 className="w-5 h-5 drop-shadow" />
                         </div>
@@ -1785,7 +1830,12 @@ export const InspectionHistory: React.FC = () => {
                               onClick={() => setPreviewPhoto(photo)}
                               className="relative group cursor-pointer rounded-lg overflow-hidden border border-slate-200 h-24"
                             >
-                              <img src={photo.url} alt={item.title} className="w-full h-full object-cover" />
+                              <img
+                                src={photo.url}
+                                alt={item.title}
+                                className="w-full h-full object-cover"
+                                onError={(e) => handlePhotoImgError(e, photo.url, item.code)}
+                              />
                               <div className="absolute top-1 left-1 bg-slate-900/75 backdrop-blur-xs text-white text-[9px] font-bold px-1.5 py-0.5 rounded max-w-[90%] truncate">
                                 {photo.slotName || 'Verification Photo'}
                               </div>
@@ -1876,6 +1926,7 @@ export const InspectionHistory: React.FC = () => {
                 src={previewPhoto.url}
                 alt={previewPhoto.itemTitle || 'Inspection Photo'}
                 className="max-w-full max-h-[70vh] object-contain rounded-xl"
+                onError={(e) => handlePhotoImgError(e, previewPhoto.url)}
               />
             </div>
 
