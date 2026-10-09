@@ -202,10 +202,11 @@ export function usePublicBaseUrl(): string {
 /**
  * Builds the vehicle inspection deep link encoded into QR stickers
  */
-export function buildVehicleDeepLink(plate: string, customBaseUrl?: string): string {
+export function buildVehicleDeepLink(plate: string, customBaseUrl?: string, token?: string): string {
   const base = customBaseUrl ? cleanUrl(customBaseUrl) : getPublicBaseUrl();
   const cleanPlate = (plate || '').trim().toUpperCase();
-  return `${base}/?plate=${encodeURIComponent(cleanPlate)}&view=driver`;
+  const tokenParam = token && token !== '****' ? `&token=${encodeURIComponent(token.trim().toUpperCase())}` : '';
+  return `${base}/?plate=${encodeURIComponent(cleanPlate)}${tokenParam}&view=driver`;
 }
 
 /**

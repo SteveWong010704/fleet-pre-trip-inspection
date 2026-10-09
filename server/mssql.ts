@@ -56,9 +56,20 @@ export async function connectMssql(): Promise<boolean> {
     isConnecting = false;
     console.log(`[MSSQL] ✓ Connected successfully to SQL Server (${config.database} on ${config.server})`);
 
-    // Self-healing schema migration: safely ensure optional & newly added columns exist in dbo.Drivers
+    // Self-healing schema migration: safely ensure optional & newly added columns exist
     try {
       await pool.request().query`
+        IF OBJECT_ID('dbo.Vehicles', 'U') IS NOT NULL
+        BEGIN
+          IF COL_LENGTH('dbo.Vehicles', 'QrToken') IS NULL
+            ALTER TABLE dbo.Vehicles ADD QrToken NVARCHAR(50) NULL;
+
+          -- Automatically assign unique 8-character static token for any vehicle missing a token
+          UPDATE dbo.Vehicles
+          SET QrToken = UPPER(SUBSTRING(REPLACE(CONVERT(VARCHAR(40), NEWID()), '-', ''), 1, 8))
+          WHERE QrToken IS NULL OR LTRIM(RTRIM(QrToken)) = '';
+        END
+
         IF OBJECT_ID('dbo.Drivers', 'U') IS NOT NULL
         BEGIN
           IF COL_LENGTH('dbo.Drivers', 'FailedAttempts') IS NULL
@@ -134,7 +145,8 @@ export async function dbLoadVehicles(): Promise<Vehicle[]> {
         AssignedRoute AS assignedRoute,
         CONVERT(NVARCHAR(30), LastInspectionDate, 120) AS lastInspectionDate,
         LastInspectionCode AS lastInspectionCode,
-        LastDriverName AS lastDriverName
+        LastDriverName AS lastDriverName,
+        QrToken AS qrToken
       FROM dbo.Vehicles
       ORDER BY Branch, VehicleNo
     `;
@@ -177,6 +189,7 @@ export async function dbSaveVehicle(v: Vehicle): Promise<void> {
     req.input('AssignedRoute', sql.NVarChar(150), v.assignedRoute || null);
     req.input('LastInspectionCode', sql.NVarChar(50), v.lastInspectionCode || null);
     req.input('LastDriverName', sql.NVarChar(100), v.lastDriverName || null);
+    req.input('QrToken', sql.NVarChar(50), v.qrToken || null);
 
     await req.query`
       MERGE dbo.Vehicles AS target
@@ -193,16 +206,17 @@ export async function dbSaveVehicle(v: Vehicle): Promise<void> {
           BatteryType = @BatteryType, Ages = @Ages, CurrentStatus = @CurrentStatus,
           CurrentOdometer = @CurrentOdometer, AssignedRoute = @AssignedRoute,
           LastInspectionCode = @LastInspectionCode, LastDriverName = @LastDriverName,
+          QrToken = @QrToken,
           UpdatedAt = SYSUTCDATETIME()
       WHEN NOT MATCHED THEN
         INSERT (VehicleNo, [No], CardNo, PinNo, Litre, LimitRm, Area, Branch, CostCenter, Brand,
                 LogoDate, Advertisement, YearOfMade, Model, EngineNo, ChassisNo, RegistrationDate,
                 TruckCategory, Capacity, Permit, TyreSize, BatteryType, Ages, CurrentStatus,
-                CurrentOdometer, AssignedRoute, LastInspectionCode, LastDriverName)
+                CurrentOdometer, AssignedRoute, LastInspectionCode, LastDriverName, QrToken)
         VALUES (@VehicleNo, @No, @CardNo, @PinNo, @Litre, @LimitRm, @Area, @Branch, @CostCenter, @Brand,
                 @LogoDate, @Advertisement, @YearOfMade, @Model, @EngineNo, @ChassisNo, @RegistrationDate,
                 @TruckCategory, @Capacity, @Permit, @TyreSize, @BatteryType, @Ages, @CurrentStatus,
-                @CurrentOdometer, @AssignedRoute, @LastInspectionCode, @LastDriverName);
+                @CurrentOdometer, @AssignedRoute, @LastInspectionCode, @LastDriverName, @QrToken);
     `;
   } catch (err) {
     console.error(`[MSSQL Error] dbSaveVehicle failed for ${v.vehicleNo}:`, err);
@@ -253,12 +267,18 @@ export async function dbLoadDrivers(): Promise<Driver[]> {
   }
 }
 
-export async function dbSaveDriver(d: Driver): Promise<void> {
+export async function dbSaveDriver(
+  d: Driver,
+  orig?: { origEmployeeId?: string; origLoginId?: string }
+): Promise<void> {
   if (!isMssqlConnected() || !pool) return;
   try {
-    const cleanEmpId = (d.employeeId || d.loginId || '').trim().toUpperCase();
-    const cleanLoginId = (d.loginId || d.employeeId || '').trim().toUpperCase();
+    const cleanEmpId = String(d.employeeId || d.loginId || '').trim().toUpperCase();
+    const cleanLoginId = String(d.loginId || d.employeeId || '').trim().toUpperCase();
     if (!cleanEmpId || !cleanLoginId) return;
+
+    const origEmpId = orig?.origEmployeeId ? String(orig.origEmployeeId).trim().toUpperCase() : cleanEmpId;
+    const origLoginId = orig?.origLoginId ? String(orig.origLoginId).trim().toUpperCase() : cleanLoginId;
 
     const noVal = typeof d.no === 'number' ? d.no : (parseInt(String(d.no || 0), 10) || null);
     const rawStatus = (d.status ? String(d.status).trim().substring(0, 1).toUpperCase() : 'A');
@@ -276,6 +296,8 @@ export async function dbSaveDriver(d: Driver): Promise<void> {
     req.input('EmployeeId', sql.NVarChar(50), cleanEmpId);
     req.input('No', sql.Int, noVal);
     req.input('LoginId', sql.NVarChar(50), cleanLoginId);
+    req.input('OrigEmpId', sql.NVarChar(50), origEmpId);
+    req.input('OrigLoginId', sql.NVarChar(50), origLoginId);
     req.input('Password', sql.NVarChar(255), d.password || 'password');
     req.input('Name', sql.NVarChar(150), (d.name || cleanEmpId).trim());
     req.input('Designation', sql.NVarChar(50), (d.designation || 'SALESMAN').trim());
@@ -290,9 +312,16 @@ export async function dbSaveDriver(d: Driver): Promise<void> {
     req.input('LockedUntil', sql.DateTime2, safeLockedUntil);
 
     await req.query`
-      IF EXISTS (SELECT 1 FROM dbo.Drivers WHERE EmployeeId = @EmployeeId OR LoginId = @LoginId)
+      IF EXISTS (
+        SELECT 1 FROM dbo.Drivers 
+        WHERE EmployeeId = @EmployeeId 
+           OR LoginId = @LoginId 
+           OR EmployeeId = @OrigEmpId 
+           OR LoginId = @OrigLoginId
+      )
       BEGIN
         UPDATE dbo.Drivers SET
+          EmployeeId = @EmployeeId,
           LoginId = @LoginId,
           [No] = @No,
           [Password] = @Password,
@@ -308,7 +337,10 @@ export async function dbSaveDriver(d: Driver): Promise<void> {
           FailedAttempts = @FailedAttempts,
           LockedUntil = @LockedUntil,
           UpdatedAt = SYSUTCDATETIME()
-        WHERE EmployeeId = @EmployeeId OR LoginId = @LoginId;
+        WHERE EmployeeId = @EmployeeId 
+           OR LoginId = @LoginId 
+           OR EmployeeId = @OrigEmpId 
+           OR LoginId = @OrigLoginId;
       END
       ELSE
       BEGIN
@@ -361,14 +393,15 @@ export async function dbBulkSaveVehicles(vehicles: Vehicle[]): Promise<{ saved: 
   return { saved, errors };
 }
 
-export async function dbDeleteDriver(employeeId: string): Promise<void> {
+export async function dbDeleteDriver(identifier: string): Promise<void> {
   if (!isMssqlConnected() || !pool) return;
   try {
+    const cleanKey = String(identifier || '').trim().toUpperCase();
     const req = pool.request();
-    req.input('EmployeeId', sql.NVarChar(50), employeeId);
-    await req.query`DELETE FROM dbo.Drivers WHERE EmployeeId = @EmployeeId`;
+    req.input('Identifier', sql.NVarChar(50), cleanKey);
+    await req.query`DELETE FROM dbo.Drivers WHERE EmployeeId = @Identifier OR LoginId = @Identifier`;
   } catch (err) {
-    console.error(`[MSSQL Error] dbDeleteDriver failed for ${employeeId}:`, err);
+    console.error(`[MSSQL Error] dbDeleteDriver failed for ${identifier}:`, err);
   }
 }
 

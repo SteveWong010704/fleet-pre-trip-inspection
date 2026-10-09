@@ -5,6 +5,7 @@ export type TruckCategory = 'Feeder' | 'Small Truck';
 export interface Vehicle {
   no: number;
   vehicleNo: string; // License Plate
+  qrToken?: string; // Static randomized secret token for anti-guessing/anti-spoofing QR validation
   cardNo: string;
   pinNo: string;
   litre: number | string;

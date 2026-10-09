@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Vehicle, FleetStats } from '../../types';
-import { fetchVehicles, fetchStats, updateVehicleStatus, updateVehicle, createVehicle, deleteVehicle } from '../../lib/api';
+import { fetchVehicles, fetchStats, updateVehicleStatus, updateVehicle, createVehicle, deleteVehicle, regenerateVehicleQrToken } from '../../lib/api';
 import { exportVehiclesToCsv } from '../../lib/csvParser';
 import { buildVehicleDeepLink, getPublicBaseUrl } from '../../lib/publicUrl';
 import {
@@ -148,7 +148,7 @@ export const FleetOverview: React.FC = () => {
   const handleOpenVehicleModal = async (v: Vehicle) => {
     setActiveModalVehicle(v);
     try {
-      const deepLink = buildVehicleDeepLink(v.vehicleNo);
+      const deepLink = buildVehicleDeepLink(v.vehicleNo, undefined, v.qrToken);
       setModalDeepLink(deepLink);
       const url = await QRCodeLib.toDataURL(deepLink, { width: 260, margin: 1 });
       setModalQrUrl(url);
@@ -766,6 +766,33 @@ export const FleetOverview: React.FC = () => {
                     ? 'text-rose-600'
                     : 'text-amber-600'
                 }>{activeModalVehicle.currentStatus}</strong>
+              </div>
+              <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 col-span-2 flex items-center justify-between">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">QR Security Key</span>
+                  <strong className="text-blue-700 font-mono text-xs">{activeModalVehicle.qrToken || 'STATIC-ACTIVE'}</strong>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const updated = await regenerateVehicleQrToken(activeModalVehicle.vehicleNo);
+                      setActiveModalVehicle(updated);
+                      const deepLink = buildVehicleDeepLink(updated.vehicleNo, undefined, updated.qrToken);
+                      setModalDeepLink(deepLink);
+                      const url = await QRCodeLib.toDataURL(deepLink, { width: 260, margin: 1 });
+                      setModalQrUrl(url);
+                      loadData(true);
+                    } catch (err: any) {
+                      alert(err.message || 'Failed to regenerate token');
+                    }
+                  }}
+                  className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 rounded-lg text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
+                  title="Generate a new static secret token if the physical sticker was compromised or changed"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Re-Key Token</span>
+                </button>
               </div>
             </div>
 

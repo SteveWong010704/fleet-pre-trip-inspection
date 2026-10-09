@@ -12,6 +12,7 @@ import {
   updateVehicle,
   createVehicle,
   deleteVehicle,
+  regenerateVehicleQrToken,
   bulkImportVehicles,
   getDrivers,
   getDriverByLogin,
@@ -228,7 +229,10 @@ function getBearerToken(req: express.Request): string | null {
   if (customHeader && typeof customHeader === 'string') {
     return customHeader.trim();
   }
-  if (req.query?.token && typeof req.query.token === 'string') {
+  if (req.query?.authToken && typeof req.query.authToken === 'string') {
+    return req.query.authToken.trim();
+  }
+  if (req.query?.token && typeof req.query.token === 'string' && req.query.token.includes('.')) {
     return req.query.token.trim();
   }
   return null;
@@ -677,7 +681,7 @@ async function startServer() {
     }
   });
 
-  // Vehicles list with filters (Mask sensitive fuel PIN for non-admins)
+  // Vehicles list with filters (Mask sensitive fuel PIN and QR security token for non-admins)
   app.get('/api/vehicles', (req, res) => {
     try {
       const authUser = tryGetAuthUser(req);
@@ -697,7 +701,59 @@ async function startServer() {
     }
   });
 
-  // Vehicle by plate (Mask sensitive fuel PIN for non-admins)
+  // Verify Vehicle QR Code endpoint
+  app.get('/api/vehicles/verify-qr', (req, res) => {
+    try {
+      const plate = ((req.query.plate as string) || '').trim().toUpperCase();
+      const token = (
+        (req.query.token as string) ||
+        (req.query.qrToken as string) ||
+        (req.query.t as string) ||
+        ''
+      ).trim().toUpperCase();
+
+      if (!plate || !token) {
+        return res.status(400).json({
+          success: false,
+          valid: false,
+          message: 'Both vehicle plate and QR security token are required for verification',
+        });
+      }
+
+      const vehicle = getVehicleByPlate(plate);
+      if (!vehicle) {
+        return res.status(404).json({
+          success: false,
+          valid: false,
+          message: `Vehicle ${plate} was not found in fleet roster`,
+        });
+      }
+
+      const isValid = Boolean(vehicle.qrToken && vehicle.qrToken.toUpperCase() === token);
+      if (!isValid) {
+        return res.status(403).json({
+          success: false,
+          valid: false,
+          message: 'Invalid or expired QR security token. Please scan the genuine vehicle windshield decal.',
+        });
+      }
+
+      const safeVehicle = {
+        ...vehicle,
+        pinNo: '****',
+      };
+
+      return res.json({
+        success: true,
+        valid: true,
+        vehicle: safeVehicle,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Vehicle by plate (Checks QR security token when supplied)
   app.get('/api/vehicles/:plate', (req, res) => {
     try {
       const authUser = tryGetAuthUser(req);
@@ -706,8 +762,46 @@ async function startServer() {
       if (!vehicle) {
         return res.status(404).json({ success: false, message: 'Vehicle not found' });
       }
-      const safeVehicle = isAdmin ? vehicle : { ...vehicle, pinNo: '****' };
-      res.json({ success: true, vehicle: safeVehicle });
+
+      const queryToken = (
+        (req.query.token as string) ||
+        (req.query.qrToken as string) ||
+        (req.query.t as string) ||
+        ''
+      ).trim().toUpperCase();
+
+      const isTokenMatched = Boolean(
+        vehicle.qrToken && queryToken && vehicle.qrToken.toUpperCase() === queryToken
+      );
+
+      if (isAdmin) {
+        return res.json({ success: true, vehicle, qrVerified: true });
+      }
+
+      const safeVehicle = {
+        ...vehicle,
+        pinNo: '****',
+        qrToken: isTokenMatched ? vehicle.qrToken : '****',
+      };
+
+      res.json({
+        success: true,
+        vehicle: safeVehicle,
+        qrVerified: isTokenMatched,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Regenerate static QR token for vehicle (Admin only)
+  app.post('/api/vehicles/:plate/regenerate-qr-token', requireAdmin, (req, res) => {
+    try {
+      const updated = regenerateVehicleQrToken(req.params.plate);
+      if (!updated) {
+        return res.status(404).json({ success: false, message: 'Vehicle not found' });
+      }
+      res.json({ success: true, vehicle: updated });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

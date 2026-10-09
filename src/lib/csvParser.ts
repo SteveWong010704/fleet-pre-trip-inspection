@@ -77,9 +77,11 @@ export function parseVehicleCsv(csvText: string): Partial<Vehicle>[] {
     const permit = rowObj['PERMIT'] || values[19] || 'JPJ';
     const tyreSize = rowObj['TYRE SIZE'] || rowObj['TYRESIZE'] || values[20] || '195/75R15';
     const batteryType = rowObj['BATTERY TYPE'] || rowObj['BATTERY'] || values[21] || '95D31L';
+    const qrToken = (rowObj['QR TOKEN'] || rowObj['QRTOKEN'] || rowObj['TOKEN'] || '').trim().toUpperCase();
 
     results.push({
       vehicleNo,
+      qrToken: qrToken || undefined,
       cardNo,
       pinNo,
       litre,
@@ -198,6 +200,7 @@ export function exportVehiclesToCsv(vehicles: Vehicle[]): string {
     'Capacity',
     'Tyre Size',
     'Battery Type',
+    'QR Token',
     'Status',
     'Last Inspection',
   ];
@@ -221,6 +224,7 @@ export function exportVehiclesToCsv(vehicles: Vehicle[]): string {
     v.capacity || '',
     `"${v.tyreSize || ''}"`,
     `"${v.batteryType || ''}"`,
+    `"${v.qrToken || ''}"`,
     `"${v.currentStatus}"`,
     `"${v.lastInspectionDate || 'N/A'}"`,
   ]);
