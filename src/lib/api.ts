@@ -66,11 +66,34 @@ export async function fetchVehicles(filters?: { branch?: string; status?: string
   return data.vehicles || [];
 }
 
-export async function fetchVehicleByPlate(plate: string): Promise<Vehicle | null> {
-  const res = await authFetch(`/api/vehicles/${encodeURIComponent(plate)}`);
+export async function fetchVehicleByPlate(plate: string, token?: string): Promise<(Vehicle & { qrVerified?: boolean }) | null> {
+  const params = new URLSearchParams();
+  if (token) params.append('token', token);
+  const queryStr = params.toString() ? `?${params.toString()}` : '';
+  const res = await authFetch(`/api/vehicles/${encodeURIComponent(plate)}${queryStr}`);
   if (!res.ok) return null;
   const data = await res.json();
-  return data.vehicle || null;
+  if (!data.vehicle) return null;
+  return {
+    ...data.vehicle,
+    qrVerified: data.qrVerified ?? false,
+  };
+}
+
+export async function verifyVehicleQr(plate: string, token: string): Promise<{ valid: boolean; vehicle?: Vehicle; message?: string }> {
+  const params = new URLSearchParams({ plate, token });
+  const res = await authFetch(`/api/vehicles/verify-qr?${params.toString()}`);
+  const data = await res.json();
+  return { valid: data.valid ?? false, vehicle: data.vehicle, message: data.message };
+}
+
+export async function regenerateVehicleQrToken(plate: string): Promise<Vehicle> {
+  const res = await authFetch(`/api/vehicles/${encodeURIComponent(plate)}/regenerate-qr-token`, {
+    method: 'POST',
+  });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || 'Failed to regenerate vehicle QR token');
+  return data.vehicle;
 }
 
 export async function createVehicle(vehicleData: Partial<Vehicle>): Promise<Vehicle> {
@@ -117,11 +140,25 @@ export async function createDriver(driverData: Partial<Driver>): Promise<Driver>
   return data.driver;
 }
 
-export async function updateDriver(identifier: string, updates: Partial<Driver>): Promise<Driver> {
+export async function updateDriver(
+  identifier: string, 
+  updates: Partial<Driver>,
+  options?: {
+    originalIdentifier?: string;
+    originalEmployeeId?: string;
+    originalLoginId?: string;
+  }
+): Promise<Driver> {
   const res = await authFetch('/api/drivers/update', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ identifier, updates }),
+    body: JSON.stringify({
+      identifier,
+      updates,
+      originalIdentifier: options?.originalIdentifier,
+      originalEmployeeId: options?.originalEmployeeId,
+      originalLoginId: options?.originalLoginId,
+    }),
   });
   const data = await res.json();
   if (!data.success) throw new Error(data.message || 'Failed to update driver');

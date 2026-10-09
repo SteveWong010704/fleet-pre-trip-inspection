@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, VehicleStatus } from '../src/types';
 import { scheduleDebouncedBackup } from './backupService';
 import { logger } from './logger';
@@ -78,6 +79,12 @@ function isLocalOrPrivateHost(url: string): boolean {
   );
 }
 
+// Generates a 12-character high-entropy static secret QR token (e.g., 'E9B71C40A83F')
+// Impossible to enumerate or guess, providing anti-spoofing security for windshield decals.
+export function generateVehicleQrToken(): string {
+  return crypto.randomBytes(6).toString('hex').toUpperCase();
+}
+
 // Initialize Store - clean slate with no preset data
 export function initStore() {
   const envPublicUrl = (process.env.PUBLIC_URL || process.env.PUBLIC_BASE_URL || process.env.NGROK_URL || '').trim();
@@ -133,6 +140,19 @@ export function initStore() {
         console.log(`[Storage] Configured Public QR Base URL: ${memoryStore.settings.publicBaseUrl}`);
       }
 
+      // Ensure all vehicles (including legacy/existing) have a unified static QR security token
+      let legacyMigrated = false;
+      memoryStore.vehicles.forEach((v) => {
+        if (!v.qrToken || typeof v.qrToken !== 'string' || !v.qrToken.trim()) {
+          v.qrToken = generateVehicleQrToken();
+          legacyMigrated = true;
+        }
+      });
+      if (legacyMigrated) {
+        console.log(`[Storage] Automatically assigned unique static QR security tokens to ${memoryStore.vehicles.length} existing vehicles.`);
+        saveStore(true);
+      }
+
       // Automatically prune any inspection records older than 45 days on startup
       pruneOldInspections(45);
     } else {
@@ -158,6 +178,17 @@ export function initStore() {
             ]);
             if (dbV.length > 0) {
               memoryStore.vehicles = dbV;
+              let mssqlTokenMigrated = 0;
+              for (const v of memoryStore.vehicles) {
+                if (!v.qrToken || typeof v.qrToken !== 'string' || !v.qrToken.trim()) {
+                  v.qrToken = generateVehicleQrToken();
+                  dbSaveVehicle(v).catch((e) => console.error(`[MSSQL] Failed to save generated token for ${v.vehicleNo}:`, e));
+                  mssqlTokenMigrated++;
+                }
+              }
+              if (mssqlTokenMigrated > 0) {
+                console.log(`[Storage] Auto-generated static QR security tokens for ${mssqlTokenMigrated} vehicles in SQL Server.`);
+              }
             } else if (memoryStore.vehicles.length > 0) {
               console.log(`[MSSQL Auto-Sync] SQL Server Vehicles table is empty, auto-pushing ${memoryStore.vehicles.length} local vehicles to SQL Server...`);
               await dbBulkSaveVehicles(memoryStore.vehicles);
@@ -369,6 +400,7 @@ export function createVehicle(vehicleData: Partial<Vehicle>): Vehicle {
   const newVehicle: Vehicle = {
     no: memoryStore.vehicles.length + 1,
     vehicleNo: cleanPlate,
+    qrToken: vehicleData.qrToken || generateVehicleQrToken(),
     cardNo: vehicleData.cardNo || `7002841-500092-${Math.floor(100000 + Math.random() * 900000)}`,
     pinNo: vehicleData.pinNo || String(Math.floor(1000 + Math.random() * 9000)),
     litre: vehicleData.litre || 24,
@@ -436,16 +468,19 @@ export async function bulkImportVehicles(vehiclesList: Partial<Vehicle>[]): Prom
     const existingIndex = memoryStore.vehicles.findIndex(v => v.vehicleNo.replace(/\s+/g, '').toUpperCase() === cleanPlate);
 
     if (existingIndex >= 0) {
+      const existingVehicle = memoryStore.vehicles[existingIndex];
       memoryStore.vehicles[existingIndex] = {
-        ...memoryStore.vehicles[existingIndex],
+        ...existingVehicle,
         ...item,
         vehicleNo: cleanPlate,
+        qrToken: item.qrToken || existingVehicle.qrToken || generateVehicleQrToken(),
       };
       updated++;
     } else {
       const newVehicle: Vehicle = {
         no: memoryStore.vehicles.length + 1,
         vehicleNo: cleanPlate,
+        qrToken: item.qrToken || generateVehicleQrToken(),
         cardNo: item.cardNo || `7002841-500092-${Math.floor(100000 + Math.random() * 900000)}`,
         pinNo: item.pinNo || String(Math.floor(1000 + Math.random() * 9000)),
         litre: item.litre || 24,
@@ -503,6 +538,30 @@ export async function bulkImportVehicles(vehiclesList: Partial<Vehicle>[]): Prom
   return { added, updated, dbSaved };
 }
 
+export function regenerateVehicleQrToken(vehicleNo: string): Vehicle | null {
+  const cleanPlate = vehicleNo.replace(/\s+/g, '').toUpperCase();
+  const index = memoryStore.vehicles.findIndex(v => v.vehicleNo.replace(/\s+/g, '').toUpperCase() === cleanPlate);
+  if (index === -1) return null;
+
+  const newToken = generateVehicleQrToken();
+  memoryStore.vehicles[index] = {
+    ...memoryStore.vehicles[index],
+    qrToken: newToken,
+  };
+
+  addAuditLog({
+    eventType: 'VEHICLE_UPDATED',
+    operator: 'Admin',
+    ip: '127.0.0.1',
+    details: `Regenerated static QR security token for vehicle ${cleanPlate}.`,
+    severity: 'warning',
+  });
+
+  saveStore();
+  dbSaveVehicle(memoryStore.vehicles[index]).catch(e => console.error('[MSSQL Error] regenerateVehicleQrToken:', e));
+  return memoryStore.vehicles[index];
+}
+
 // Driver APIs
 export function getDrivers(filters?: { depot?: string; status?: string; search?: string }): Driver[] {
   let list = [...memoryStore.drivers];
@@ -529,11 +588,13 @@ export function getDrivers(filters?: { depot?: string; status?: string; search?:
 }
 
 export function getDriverByLogin(loginId: string): Driver | undefined {
-  const clean = loginId.trim().toUpperCase();
-  return memoryStore.drivers.find(d => 
-    d.loginId.toUpperCase() === clean || 
-    d.employeeId.toUpperCase() === clean
-  );
+  const clean = String(loginId || '').trim().toUpperCase();
+  if (!clean) return undefined;
+  return memoryStore.drivers.find(d => {
+    const dLogin = String(d.loginId || '').trim().toUpperCase();
+    const dEmp = String(d.employeeId || '').trim().toUpperCase();
+    return dLogin === clean || dEmp === clean;
+  });
 }
 
 export function verifyDriverLogin(loginId: string, passwordAttempt: string): { success: boolean; driver?: Driver; locked?: boolean; remainingAttempts?: number; message?: string } {
@@ -668,17 +729,53 @@ export async function bulkImportDrivers(driversList: Partial<Driver>[]): Promise
   return { added, updated, dbSaved };
 }
 
-export function updateDriver(identifier: string, updates: Partial<Driver>): Driver | null {
-  const cleanKey = identifier.trim().toUpperCase();
-  const index = memoryStore.drivers.findIndex(d => 
-    d.loginId.toUpperCase() === cleanKey || 
-    d.employeeId.toUpperCase() === cleanKey
-  );
+export function updateDriver(
+  identifier: string,
+  updates: Partial<Driver>,
+  options?: {
+    originalEmployeeId?: string;
+    originalLoginId?: string;
+    fallbackIdentifier?: string;
+  }
+): Driver | null {
+  const cleanKey = String(identifier || '').trim().toUpperCase();
+  const cleanOrigEmp = String(options?.originalEmployeeId || '').trim().toUpperCase();
+  const cleanOrigLogin = String(options?.originalLoginId || '').trim().toUpperCase();
+  const cleanFallback = String(options?.fallbackIdentifier || '').trim().toUpperCase();
+  const cleanNewEmp = String(updates.employeeId || '').trim().toUpperCase();
+  const cleanNewLogin = String(updates.loginId || '').trim().toUpperCase();
+
+  const index = memoryStore.drivers.findIndex(d => {
+    const dLogin = String(d.loginId || '').trim().toUpperCase();
+    const dEmp = String(d.employeeId || '').trim().toUpperCase();
+
+    // 1. Match original identifier
+    if (cleanKey && (dLogin === cleanKey || dEmp === cleanKey)) return true;
+    // 2. Match original employee ID if provided
+    if (cleanOrigEmp && dEmp === cleanOrigEmp) return true;
+    // 3. Match original login ID if provided
+    if (cleanOrigLogin && dLogin === cleanOrigLogin) return true;
+    // 4. Match fallback identifier
+    if (cleanFallback && (dLogin === cleanFallback || dEmp === cleanFallback)) return true;
+    // 5. Match by driver number if provided
+    if (typeof updates.no === 'number' && typeof d.no === 'number' && d.no === updates.no) return true;
+    // 6. Match by new employee ID if already matching
+    if (cleanNewEmp && dEmp === cleanNewEmp) return true;
+    // 7. Match by new login ID if already matching
+    if (cleanNewLogin && dLogin === cleanNewLogin) return true;
+
+    return false;
+  });
+
   if (index === -1) return null;
+
+  const originalDriver = { ...memoryStore.drivers[index] };
 
   memoryStore.drivers[index] = {
     ...memoryStore.drivers[index],
     ...updates,
+    loginId: updates.loginId !== undefined ? String(updates.loginId).trim() : memoryStore.drivers[index].loginId,
+    employeeId: updates.employeeId !== undefined ? String(updates.employeeId).trim().toUpperCase() : memoryStore.drivers[index].employeeId,
     // Reset lockout if requested or updated
     failedAttempts: updates.failedAttempts !== undefined ? updates.failedAttempts : memoryStore.drivers[index].failedAttempts,
     lockedUntil: updates.lockedUntil !== undefined ? updates.lockedUntil : memoryStore.drivers[index].lockedUntil,
@@ -693,16 +790,21 @@ export function updateDriver(identifier: string, updates: Partial<Driver>): Driv
   });
 
   saveStore();
-  dbSaveDriver(memoryStore.drivers[index]).catch(e => console.error('[MSSQL Error] updateDriver:', e));
+  dbSaveDriver(memoryStore.drivers[index], {
+    origEmployeeId: originalDriver.employeeId,
+    origLoginId: originalDriver.loginId,
+  }).catch(e => console.error('[MSSQL Error] updateDriver:', e));
+
   return memoryStore.drivers[index];
 }
 
 export function unlockDriver(identifier: string): { success: boolean; message: string; driver?: Driver } {
-  const cleanKey = identifier.trim().toUpperCase();
-  const index = memoryStore.drivers.findIndex(d => 
-    d.loginId.toUpperCase() === cleanKey || 
-    d.employeeId.toUpperCase() === cleanKey
-  );
+  const cleanKey = String(identifier || '').trim().toUpperCase();
+  const index = memoryStore.drivers.findIndex(d => {
+    const dLogin = String(d.loginId || '').trim().toUpperCase();
+    const dEmp = String(d.employeeId || '').trim().toUpperCase();
+    return dLogin === cleanKey || dEmp === cleanKey;
+  });
   if (index === -1) {
     return { success: false, message: `Driver with ID ${identifier} not found.` };
   }
@@ -775,12 +877,14 @@ export function createDriver(driverData: Partial<Driver>): Driver {
 }
 
 export function deleteDriver(identifier: string): boolean {
-  const cleanKey = identifier.trim().toUpperCase();
+  const cleanKey = String(identifier || '').trim().toUpperCase();
+  if (!cleanKey) return false;
   const prevLen = memoryStore.drivers.length;
-  memoryStore.drivers = memoryStore.drivers.filter(d => 
-    d.loginId.toUpperCase() !== cleanKey && 
-    d.employeeId.toUpperCase() !== cleanKey
-  );
+  memoryStore.drivers = memoryStore.drivers.filter(d => {
+    const dLogin = String(d.loginId || '').trim().toUpperCase();
+    const dEmp = String(d.employeeId || '').trim().toUpperCase();
+    return dLogin !== cleanKey && dEmp !== cleanKey;
+  });
   if (memoryStore.drivers.length < prevLen) {
     addAuditLog({
       eventType: 'DRIVER_DELETED',

@@ -111,14 +111,17 @@
 
     const handleScannedData = async (data: string) => {
       let plate = '';
+      let token = '';
 
       try {
-        if (data.includes('?plate=')) {
-          const url = new URL(data);
+        if (data.includes('?plate=') || data.includes('&plate=')) {
+          const url = new URL(data, window.location.origin);
           plate = url.searchParams.get('plate') || '';
+          token = (url.searchParams.get('token') || url.searchParams.get('qrToken') || url.searchParams.get('t') || '').trim().toUpperCase();
         } else if (data.startsWith('{')) {
           const parsed = JSON.parse(data);
           plate = parsed.plate || parsed.vehicleNo || '';
+          token = (parsed.token || parsed.qrToken || parsed.t || '').trim().toUpperCase();
         } else {
           plate = data.trim();
         }
@@ -128,13 +131,23 @@
 
       if (plate) {
         const cleanPlate = plate.replace(/\s+/g, '').toUpperCase();
-        const matched = vehicles.find(item => item.vehicleNo.replace(/\s+/g, '').toUpperCase() === cleanPlate)
-          || await fetchVehicleByPlate(cleanPlate);
+        
+        // Secure validation: fetch vehicle with scanned token
+        const verifiedResult = await fetchVehicleByPlate(cleanPlate, token);
 
-        if (matched) {
-          stopCamera();
-          await handleSelectWithInspectionCheck(matched);
+        if (!verifiedResult) {
+          setCameraError(`Vehicle ${cleanPlate} not recognized in fleet records.`);
+          return;
         }
+
+        // If the vehicle has an active security token, verify token validity
+        if (token && !verifiedResult.qrVerified) {
+          setCameraError(`QR verification failed for ${cleanPlate}. Please scan the physical QR code on the vehicle.`);
+          return;
+        }
+
+        stopCamera();
+        await handleSelectWithInspectionCheck(verifiedResult);
       }
     };
 

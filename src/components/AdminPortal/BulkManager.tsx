@@ -88,7 +88,7 @@ export const BulkManager: React.FC = () => {
           const qrs = await Promise.all(
             parsedVehicles.slice(0, 30).map(async (v) => {
               const plate = (v.vehicleNo || '').toUpperCase();
-              const inspectionUrl = buildVehicleDeepLink(plate);
+              const inspectionUrl = buildVehicleDeepLink(plate, undefined, v.qrToken);
               const qrUrl = await QRCodeLib.toDataURL(inspectionUrl, {
                 width: 160,
                 margin: 1,

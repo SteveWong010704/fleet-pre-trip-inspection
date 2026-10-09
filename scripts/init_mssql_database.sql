@@ -60,6 +60,7 @@ CREATE TABLE dbo.Vehicles (
     LastInspectionDate DATETIME2 NULL,
     LastInspectionCode NVARCHAR(50) NULL,
     LastDriverName NVARCHAR(100) NULL,
+    QrToken NVARCHAR(50) NULL, -- Static randomized secret token for anti-guessing/anti-spoofing QR validation
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     UpdatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT PK_Vehicles PRIMARY KEY CLUSTERED (VehicleNo)

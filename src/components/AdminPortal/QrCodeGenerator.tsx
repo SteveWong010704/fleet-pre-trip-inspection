@@ -159,7 +159,7 @@ export const QrCodeGenerator: React.FC = () => {
     await Promise.all(
       missing.map(async (v) => {
         try {
-          const deepLink = buildVehicleDeepLink(v.vehicleNo, baseToEncode);
+          const deepLink = buildVehicleDeepLink(v.vehicleNo, baseToEncode, v.qrToken);
           updates[v.vehicleNo] = await QRCodeLib.toDataURL(deepLink, {
             width: 220,
             margin: 1,
@@ -205,7 +205,8 @@ export const QrCodeGenerator: React.FC = () => {
   };
 
   const handleCopyLink = (plate: string) => {
-    const link = buildVehicleDeepLink(plate, publicUrlInput);
+    const targetVehicle = vehicles.find(item => item.vehicleNo === plate);
+    const link = buildVehicleDeepLink(plate, publicUrlInput, targetVehicle?.qrToken);
     navigator.clipboard.writeText(link);
     setCopiedPlate(plate);
     setTimeout(() => setCopiedPlate(null), 2500);
@@ -748,7 +749,7 @@ export const QrCodeGenerator: React.FC = () => {
             {displayedVehicles.map((v) => {
               const isSelected = selectedPlates.has(v.vehicleNo);
               const qrSrc = qrMap[v.vehicleNo];
-              const deepLink = buildVehicleDeepLink(v.vehicleNo, publicUrlInput);
+              const deepLink = buildVehicleDeepLink(v.vehicleNo, publicUrlInput, v.qrToken);
               const isCopied = copiedPlate === v.vehicleNo;
 
               return (

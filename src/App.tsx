@@ -114,6 +114,7 @@ export default function App() {
     const urlParams = new URLSearchParams(window.location.search);
     const viewParam = urlParams.get('view');
     const plateParam = urlParams.get('plate');
+    const tokenParam = (urlParams.get('token') || urlParams.get('qrToken') || urlParams.get('t') || '').trim();
     const certIdParam = urlParams.get('certId');
 
     // If driver scanned a vehicle QR code with plate or certId
@@ -121,8 +122,11 @@ export default function App() {
       setCurrentView('driver');
       setDriverStep('auth');
       if (plateParam) {
-        fetchVehicleByPlate(plateParam).then((v) => {
+        fetchVehicleByPlate(plateParam, tokenParam).then((v) => {
           if (v) {
+            if (tokenParam && !v.qrVerified) {
+              console.warn(`[Security] Direct URL access for ${plateParam} supplied mismatched security token.`);
+            }
             setSelectedVehicle(v);
           }
         }).catch(() => {});
