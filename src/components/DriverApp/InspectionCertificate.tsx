@@ -83,6 +83,24 @@ export const InspectionCertificate: React.FC<InspectionCertificateProps> = ({
     window.print();
   };
 
+  const handlePhotoImgError = (e: React.SyntheticEvent<HTMLImageElement>, photoUrl?: string) => {
+    const img = e.currentTarget;
+    if (img.dataset.fallbackTried === '2') return;
+
+    const attempts = Number(img.dataset.fallbackTried || 0);
+    img.dataset.fallbackTried = String(attempts + 1);
+
+    const dateStr = record.timestamp ? record.timestamp.slice(0, 10) : '';
+    const cleanPlate = (record.vehicleNo || '').trim().toUpperCase().replace(/[^a-zA-Z0-9]/g, '_');
+    const baseName = (photoUrl || img.src).split('/').pop() || '';
+
+    if (attempts === 0 && dateStr && cleanPlate && baseName) {
+      img.src = `/api/backup/photos/${dateStr}/${cleanPlate}/${baseName}`;
+    } else if (attempts === 1 && dateStr && baseName) {
+      img.src = `/api/backup/photos/${dateStr}/${baseName}`;
+    }
+  };
+
   const mapUrl = record.gpsLocation
     ? `https://www.google.com/maps/search/?api=1&query=${record.gpsLocation.lat},${record.gpsLocation.lng}`
     : `https://www.google.com/maps/search/?api=1&query=3.0319,101.7482`;
@@ -349,7 +367,12 @@ export const InspectionCertificate: React.FC<InspectionCertificateProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {record.photos.map((p, idx) => (
                 <div key={idx} className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2 shadow-sm">
-                  <img src={p.url} alt={p.caption} className="w-full h-40 object-cover rounded-xl border border-slate-200" />
+                  <img
+                    src={p.url}
+                    alt={p.caption}
+                    className="w-full h-40 object-cover rounded-xl border border-slate-200"
+                    onError={(e) => handlePhotoImgError(e, p.url)}
+                  />
                   <div className="text-[11px] text-slate-700 space-y-0.5">
                     <div className="font-bold text-slate-900">{p.itemTitle || 'Vehicle Photo'}</div>
                     <div className="text-slate-600">{p.caption}</div>

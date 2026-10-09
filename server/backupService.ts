@@ -258,11 +258,13 @@ export function performDailyBackup(reason: string = 'scheduled'): {
         brake_system: { code: 2, title: 'Brake_System' },
         lights_indicators: { code: 3, title: 'Lights_Indicators' },
         steering_handling: { code: 4, title: 'Steering_Handling' },
-        mirrors_wipers: { code: 5, title: 'Mirrors_Wipers' },
+        radiator_coolant: { code: 5, title: 'Radiator_Coolant' },
+        mirrors_wipers: { code: 5, title: 'Radiator_Coolant' }, // Legacy alias
         dashboard_warnings: { code: 6, title: 'Dashboard_Warnings' },
         emergency_equipment: { code: 7, title: 'Emergency_Equipment' },
-        body_passenger_doors: { code: 8, title: 'Body_Cargo_Doors' },
-        hvac_ventilation: { code: 9, title: 'HVAC_Ventilation' },
+        body_passenger_doors: { code: 8, title: 'Cargo_Body' },
+        diesel_fuel_cap: { code: 9, title: 'Diesel_Fuel_Cap' },
+        hvac_ventilation: { code: 9, title: 'Diesel_Fuel_Cap' }, // Legacy alias
         fluids_powertrain: { code: 10, title: 'Fluids_Powertrain' },
       };
 
@@ -383,6 +385,18 @@ export function performDailyBackup(reason: string = 'scheduled'): {
               try {
                 fs.writeFileSync(uploadDest, buffer);
                 fs.writeFileSync(photosDest, buffer);
+
+                // Parity guarantee: if photo.url was a local /uploads/ path with a different basename,
+                // also save a copy under that exact original filename so both old & new URLs resolve perfectly
+                if (photo.url && photo.url.startsWith('/uploads/')) {
+                  const origBase = path.basename(photo.url);
+                  if (origBase && origBase !== fileName) {
+                    try {
+                      fs.writeFileSync(path.join(uploadPlateDir, origBase), buffer);
+                      fs.writeFileSync(path.join(photosPlateDir, origBase), buffer);
+                    } catch {}
+                  }
+                }
 
                 totalPhotosSaved += 1;
                 photosCatalog.push({
@@ -713,6 +727,15 @@ export async function restoreFromBackupZip(zipBuffer: Buffer, originalFilename?:
 
   let inspectionsList: InspectionRecord[] = [];
   let photosRestored = 0;
+  interface PhotoEntry {
+    entryName: string;
+    basename: string;
+    data: Buffer;
+    dateStr?: string;
+    cleanPlate?: string;
+    codePrefix?: string;
+  }
+  const photoEntries: PhotoEntry[] = [];
 
   // 2. Iterate through entries
   for (const entry of zipEntries) {
@@ -737,31 +760,42 @@ export async function restoreFromBackupZip(zipBuffer: Buffer, originalFilename?:
 
     // If photo file
     if (
-      (entryName.includes('/photos/') || entryName.startsWith('photos/') || entryName.includes('/upload/') || entryName.startsWith('upload/')) &&
       !entry.isDirectory &&
       /\.(jpe?g|png|webp)$/i.test(entryName)
     ) {
       try {
-        let targetSubPath = '';
-        const uploadMatch = entryName.match(/upload\/(\d{4}-\d{2}-\d{2})\/([^\/]+)\/([^\/]+)$/i);
-        const photosPlateMatch = entryName.match(/photos\/([^\/]+)\/([^\/]+)$/i);
-
-        if (uploadMatch) {
-          targetSubPath = path.join(uploadMatch[1], uploadMatch[2], uploadMatch[3]);
-        } else if (photosPlateMatch) {
-          const dateForPath = backupDate || new Date().toISOString().slice(0, 10);
-          targetSubPath = path.join(dateForPath, photosPlateMatch[1], photosPlateMatch[2]);
-        } else {
-          targetSubPath = path.basename(entryName);
+        const basename = path.basename(entryName);
+        const dateMatch = entryName.match(/(\d{4}-\d{2}-\d{2})/);
+        const dateStr = dateMatch ? dateMatch[1] : backupDate;
+        
+        let cleanPlate = '';
+        const plateMatch = entryName.match(/(?:upload\/\d{4}-\d{2}-\d{2}|photos|uploads\/\d{4}-\d{2}-\d{2}|upload|uploads)\/([^\/]+)\/([^\/]+)$/i);
+        if (plateMatch) {
+          cleanPlate = plateMatch[1].trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '_');
         }
 
-        const targetUploadPath = path.join(uploadsDir, targetSubPath);
+        const codeMatch = basename.match(/^(\d{2})_/);
+        const codePrefix = codeMatch ? codeMatch[1] : undefined;
+
+        const data = entry.getData();
+        photoEntries.push({
+          entryName,
+          basename,
+          data,
+          dateStr,
+          cleanPlate,
+          codePrefix,
+        });
+
+        // Write to primary uploads location
+        const targetDate = dateStr || backupDate || new Date().toISOString().slice(0, 10);
+        const subPath = cleanPlate ? path.join(targetDate, cleanPlate, basename) : path.join(targetDate, basename);
+        const targetUploadPath = path.join(uploadsDir, subPath);
         const targetDir = path.dirname(targetUploadPath);
         if (!fs.existsSync(targetDir)) {
           fs.mkdirSync(targetDir, { recursive: true });
         }
-
-        fs.writeFileSync(targetUploadPath, entry.getData());
+        fs.writeFileSync(targetUploadPath, data);
         photosRestored++;
       } catch (photoErr) {
         console.warn('[Restore] Error extracting photo:', photoErr);
@@ -779,6 +813,90 @@ export async function restoreFromBackupZip(zipBuffer: Buffer, originalFilename?:
           inspectionsList = snap.inspections;
         }
       } catch {}
+    }
+  }
+
+  // 2.5 Cross-reference every inspection record's photo URLs to guarantee they exist on disk at the exact expected path
+  if (inspectionsList.length > 0 && photoEntries.length > 0) {
+    for (const insp of inspectionsList) {
+      const inspDate = (insp.timestamp ? insp.timestamp.slice(0, 10) : backupDate) || backupDate || new Date().toISOString().slice(0, 10);
+      const cleanPlate = (insp.vehicleNo || 'FLEET').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '_');
+
+      const ensurePhotoOnDisk = (photoUrl?: string, itemCode?: number | string) => {
+        if (!photoUrl || !photoUrl.startsWith('/uploads/')) return;
+        const subPath = photoUrl.replace(/^\/uploads\//, '');
+        const fullExpectedPath = path.join(uploadsDir, ...subPath.split('/'));
+        if (fs.existsSync(fullExpectedPath)) return;
+
+        const targetBase = path.basename(subPath);
+        const targetCode = String(itemCode || '').padStart(2, '0');
+
+        const isRadiator =
+          targetBase.toLowerCase().includes('radiator') ||
+          targetBase.toLowerCase().includes('coolant') ||
+          targetCode === '05' ||
+          targetCode === '03';
+
+        const isDiesel =
+          targetBase.toLowerCase().includes('diesel') ||
+          targetBase.toLowerCase().includes('fuel') ||
+          targetBase.toLowerCase().includes('cap') ||
+          targetCode === '09' ||
+          targetCode === '07' ||
+          targetCode === '04';
+
+        // Find match in extracted photos
+        const match =
+          photoEntries.find((p) => p.cleanPlate === cleanPlate && p.basename.toLowerCase() === targetBase.toLowerCase()) ||
+          photoEntries.find((p) => p.basename.toLowerCase() === targetBase.toLowerCase()) ||
+          (isRadiator
+            ? photoEntries.find(
+                (p) =>
+                  (p.cleanPlate === cleanPlate || !p.cleanPlate) &&
+                  (p.basename.toLowerCase().includes('radiator') ||
+                    p.basename.toLowerCase().includes('coolant') ||
+                    p.codePrefix === '05' ||
+                    p.codePrefix === '03')
+              )
+            : null) ||
+          (isDiesel
+            ? photoEntries.find(
+                (p) =>
+                  (p.cleanPlate === cleanPlate || !p.cleanPlate) &&
+                  (p.basename.toLowerCase().includes('diesel') ||
+                    p.basename.toLowerCase().includes('fuel') ||
+                    p.basename.toLowerCase().includes('cap') ||
+                    p.codePrefix === '09' ||
+                    p.codePrefix === '07' ||
+                    p.codePrefix === '04')
+              )
+            : null) ||
+          photoEntries.find((p) => p.cleanPlate === cleanPlate && targetCode && p.codePrefix === targetCode) ||
+          photoEntries.find((p) => p.cleanPlate === cleanPlate);
+
+        if (match) {
+          try {
+            fs.mkdirSync(path.dirname(fullExpectedPath), { recursive: true });
+            fs.writeFileSync(fullExpectedPath, match.data);
+          } catch {}
+        }
+      };
+
+      if (Array.isArray(insp.photos)) {
+        insp.photos.forEach((p, idx) => ensurePhotoOnDisk(p.url, idx + 1));
+      }
+      if (Array.isArray(insp.items)) {
+        insp.items.forEach((it, idx) => ensurePhotoOnDisk(it.photoUrl, it.code || idx + 1));
+      }
+      if (Array.isArray(insp.checkpoints)) {
+        insp.checkpoints.forEach((cp, idx) => ensurePhotoOnDisk(cp.photoUrl, cp.code || idx + 1));
+      }
+      if (Array.isArray(insp.defects)) {
+        insp.defects.forEach((def) => ensurePhotoOnDisk(def.photoUrl));
+      }
+      if (insp.signature) {
+        ensurePhotoOnDisk(insp.signature);
+      }
     }
   }
 
