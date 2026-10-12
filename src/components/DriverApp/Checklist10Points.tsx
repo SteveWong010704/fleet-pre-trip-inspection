@@ -2,14 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Vehicle, Driver, InspectionCheckItem, InspectionPhoto, CheckStatus, isSaturdayInspection } from '../../types';
 import { getCurrentGps, applyWatermarkToImage } from '../../lib/cameraWatermark';
 import { getCheckpointRequiredPhotoCount, getCheckpointSlots } from '../../lib/checkpointConfig';
-import { CameraFrameOverlay } from './CameraFrameOverlay';
+import { CHECKPOINT_EXAMPLES, ExamplePhotoGuide } from '../../lib/checkpointExamples';
 import {
-  LIGHTS_CHECKS,
-  BRAKES_CHECKS,
-  STEERING_CHECKS,
-  FLUIDS_CHECKS,
-  FEEDER_APAD_SAFETY_EQUIPMENT,
-  SMALL_TRUCK_SAFETY_EQUIPMENT,
   getCheckpointSystemChecks,
   getDefaultSystemChecks,
 } from '../../lib/quickChecklistConfig';
@@ -18,20 +12,15 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
-  ArrowRight,
-  ArrowLeft,
-  RefreshCw,
-  Trash2,
-  X,
   ChevronRight,
   ChevronLeft,
-  CheckSquare,
-  Square,
-  ZoomIn,
-  ZoomOut,
-  AlertCircle,
-  Check,
+  ArrowRight,
+  Trash2,
+  X,
   Zap,
+  ZoomIn,
+  RefreshCw,
+  Info,
 } from 'lucide-react';
 
 interface Props {
@@ -86,21 +75,27 @@ export const Checklist10Points: React.FC<Props> = ({
   // Live GPS Coordinates
   const [gpsInfo, setGpsInfo] = useState<{ lat: number; lng: number; accuracy: number; address?: string } | null>(null);
 
-  // Active photo capture target
+  // Active photo capture target for native camera
   const [activeTarget, setActiveTarget] = useState<ActiveTarget | null>(null);
   const [activeNote, setActiveNote] = useState<string>('');
   const [isProcessingPhoto, setIsProcessingPhoto] = useState<boolean>(false);
   const [cardError, setCardError] = useState<string>('');
 
-  // Camera stream state
-  const [zoomLevel, setZoomLevel] = useState<number>(1);
-  const [cameraActive, setCameraActive] = useState<boolean>(false);
-  const [cameraLoading, setCameraLoading] = useState<boolean>(false);
-  const [cameraError, setCameraError] = useState<string>('');
-  const [torchSupported, setTorchSupported] = useState<boolean>(false);
-  const [torchActive, setTorchActive] = useState<boolean>(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  // Enlarged sample photo preview modal
+  const [previewExample, setPreviewExample] = useState<ExamplePhotoGuide | null>(null);
+
+  // Active slot index for checkpoints with multiple slots (e.g. tyres, body)
+  const [activeSlotIndex, setActiveSlotIndex] = useState<number>(0);
+
+  // Reset active slot index when switching checkpoint cards
+  useEffect(() => {
+    setActiveSlotIndex(0);
+  }, [currentCardIndex]);
+
+  // Meter engine start reminder confirmation modal state
+  const [pendingMeterTarget, setPendingMeterTarget] = useState<ActiveTarget | null>(null);
+
+  // Hidden native camera file input
   const nativeCameraInputRef = useRef<HTMLInputElement | null>(null);
 
   const isFeeder =
@@ -116,13 +111,6 @@ export const Checklist10Points: React.FC<Props> = ({
       .catch(() => {
         setGpsInfo({ lat: 3.0319, lng: 101.7482, accuracy: 15, address: 'Balakong Logistics Depot, Selangor' });
       });
-  }, []);
-
-  // Cleanup camera stream when component unmounts
-  useEffect(() => {
-    return () => {
-      stopCamera();
-    };
   }, []);
 
   // Ensure dashboard and system checkpoints have default valid checks
@@ -157,171 +145,39 @@ export const Checklist10Points: React.FC<Props> = ({
     }
   }, []);
 
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-    setCameraActive(false);
-    setCameraLoading(false);
-    setTorchActive(false);
-    setTorchSupported(false);
-  };
+  const isSaturday = isSaturdayInspection();
+  const currentItem = items[currentCardIndex] || items[0];
+  const requiredPhotoCount = getCheckpointRequiredPhotoCount(currentItem?.id, isSaturday);
+  const slots = getCheckpointSlots(currentItem?.id, isSaturday);
+  const itemPhotos = photos.filter((p) => p.itemId === currentItem?.id);
+  const exampleGuide: ExamplePhotoGuide | undefined = currentItem ? CHECKPOINT_EXAMPLES[currentItem.id] : undefined;
+  
+  // Resolve slot-specific example photo (e.g. Front-Right tyre vs Front-Left tyre)
+  const currentSlot = slots?.find((s) => s.index === activeSlotIndex) || slots?.[0];
+  const activeSlotExample = currentSlot && exampleGuide?.slots?.[currentSlot.index];
+  const displayExamplePhoto = activeSlotExample?.realPhotoPath || exampleGuide?.realPhotoPath || exampleGuide?.exampleImageSvg;
+  const displayExampleFileName = activeSlotExample?.fileName || exampleGuide?.fileName;
+  const displayExampleTitle = activeSlotExample?.title ? `${exampleGuide?.title} (${activeSlotExample.title})` : (exampleGuide?.title || '');
 
-  const toggleTorch = async () => {
-    if (!streamRef.current) return;
-    const videoTrack = streamRef.current.getVideoTracks()[0];
-    if (!videoTrack) return;
-    try {
-      const nextState = !torchActive;
-      await videoTrack.applyConstraints({
-        advanced: [{ torch: nextState } as any],
-      });
-      setTorchActive(nextState);
-    } catch (err) {
-      console.warn('Failed to toggle flashlight / torch:', err);
-    }
-  };
-
-  const applyZoomToTrack = async (targetZoom: number) => {
-    if (!streamRef.current) return;
-    const videoTrack = streamRef.current.getVideoTracks()[0];
-    if (!videoTrack) return;
-
-    try {
-      const capabilities: any = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
-      if (capabilities.zoom) {
-        const clamped = Math.min(Math.max(targetZoom, capabilities.zoom.min || 1), capabilities.zoom.max || 3);
-        await videoTrack.applyConstraints({
-          advanced: [{ zoom: clamped } as any],
-        });
-        setZoomLevel(clamped);
-      } else {
-        setZoomLevel(targetZoom);
-      }
-    } catch {
-      setZoomLevel(targetZoom);
-    }
-  };
-
-  const startCamera = async () => {
-    setCameraError('');
-    stopCamera();
-    setZoomLevel(1);
-    setCameraLoading(true);
-
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setCameraError('Live camera stream not supported on this browser. Please use native device camera.');
-      setCameraLoading(false);
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      });
-
-      streamRef.current = stream;
-
-      // Query and auto-enable flashlight / torch for dawn / night inspection
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack) {
-        const capabilities: any = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
-        if (capabilities.torch) {
-          setTorchSupported(true);
-          try {
-            await videoTrack.applyConstraints({
-              advanced: [{ torch: true } as any],
-            });
-            setTorchActive(true);
-          } catch {
-            setTorchActive(false);
-          }
-        } else {
-          setTorchSupported(false);
-          setTorchActive(false);
-        }
-      }
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current?.play().catch(() => {});
-          setCameraActive(true);
-          setCameraLoading(false);
-        };
-      } else {
-        setCameraActive(true);
-        setCameraLoading(false);
-      }
-    } catch {
-      setCameraError('Camera access declined or unavailable. Use the device camera button below.');
-      setCameraLoading(false);
-    }
-  };
-
-  const openCameraModal = (target: ActiveTarget, existingNote: string = '') => {
+  // DIRECT ONE-CLICK NATIVE CAMERA LAUNCH
+  const executeNativeCameraLaunch = (target: ActiveTarget, existingNote: string = '') => {
     setActiveTarget(target);
     setActiveNote(existingNote);
     setCardError('');
-    startCamera();
-  };
-
-  const closeCameraModal = () => {
-    stopCamera();
-    setActiveTarget(null);
-    setActiveNote('');
-  };
-
-  const captureLivePhoto = async () => {
-    if (!activeTarget) return;
-
-    let base64Image = '';
-
-    if (videoRef.current && cameraActive) {
-      const video = videoRef.current;
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || 1280;
-      canvas.height = video.videoHeight || 720;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        base64Image = canvas.toDataURL('image/jpeg', 0.85);
-      }
+    if (nativeCameraInputRef.current) {
+      nativeCameraInputRef.current.value = '';
+      nativeCameraInputRef.current.click();
     }
+  };
 
-    if (!base64Image) {
-      nativeCameraInputRef.current?.click();
+  const triggerNativeCamera = (target: ActiveTarget, existingNote: string = '') => {
+    if (target.id === 'dashboard_warnings') {
+      // Driver MUST start engine before taking meter photo
+      setPendingMeterTarget(target);
+      setActiveNote(existingNote);
       return;
     }
-
-    setIsProcessingPhoto(true);
-    try {
-      const watermarked = await applyWatermarkToImage(base64Image, {
-        vehicleNo: vehicle.vehicleNo,
-        driverName: driver.name,
-        driverId: driver.loginId,
-        itemTitle: `${activeTarget.code}. ${activeTarget.title}${activeTarget.slotName ? ` - ${activeTarget.slotName}` : ''}`,
-        customNote: activeTarget.slotName
-          ? `${activeTarget.slotName} ${activeTarget.isDefect ? '(DEFECT)' : '(OK)'}`
-          : activeTarget.isDefect
-          ? 'DEFECT'
-          : undefined,
-        gps: gpsInfo ? { lat: gpsInfo.lat, lng: gpsInfo.lng, accuracy: gpsInfo.accuracy } : undefined,
-      });
-
-      saveCapturedPhoto(watermarked);
-      closeCameraModal();
-    } catch {
-      alert('Error stamping watermark on photo. Please try again.');
-    } finally {
-      setIsProcessingPhoto(false);
-    }
+    executeNativeCameraLaunch(target, existingNote);
   };
 
   const handleNativeCameraCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -347,11 +203,12 @@ export const Checklist10Points: React.FC<Props> = ({
         });
 
         saveCapturedPhoto(watermarked);
-        closeCameraModal();
       } catch (err: any) {
-        alert('Failed to process image: ' + err.message);
+        alert('Failed to stamp watermark: ' + (err?.message || 'Unknown error'));
       } finally {
         setIsProcessingPhoto(false);
+        setActiveTarget(null);
+        setActiveNote('');
       }
     };
     reader.readAsDataURL(file);
@@ -424,12 +281,9 @@ export const Checklist10Points: React.FC<Props> = ({
 
       const patch: Partial<InspectionCheckItem> = {
         status: 'Pass',
-        defectNote: '', // Defect remark cleared when driver chooses Pass!
+        defectNote: '',
+        systemChecks: allPassedChecks,
       };
-
-      if (activeList.length > 0) {
-        patch.systemChecks = allPassedChecks;
-      }
 
       if (itemId === 'dashboard_warnings') {
         patch.dashboardChecks = {
@@ -439,157 +293,111 @@ export const Checklist10Points: React.FC<Props> = ({
           oilLightOff: true,
         };
       }
-
       updateItemField(itemId, patch);
-      setCardError('');
     } else {
-      updateItemField(itemId, { status: 'Fail' });
+      updateItemField(itemId, { status: newStatus });
     }
   };
 
   const handleDefectNoteChange = (itemId: string, note: string) => {
-    const it = items.find((i) => i.id === itemId);
-    if (it?.status === 'Fail') {
-      updateItemField(itemId, { defectNote: note });
-    }
+    updateItemField(itemId, { defectNote: note });
   };
 
-  // Toggle defect tag in remark
   const handleTagClick = (itemId: string, currentNote: string, tag: string) => {
-    let newNote = '';
-    if (!currentNote) {
-      newNote = tag;
-    } else if (currentNote.includes(tag)) {
-      newNote = currentNote
-        .split('; ')
-        .filter((t) => t !== tag)
-        .join('; ');
+    if (currentNote.includes(tag)) {
+      const updated = currentNote
+        .replace(tag, '')
+        .replace(/,\s*,/g, ',')
+        .replace(/^,\s*|\s*,\s*$/g, '')
+        .trim();
+      updateItemField(itemId, { defectNote: updated });
     } else {
-      newNote = `${currentNote}; ${tag}`;
+      const updated = currentNote ? `${currentNote}, ${tag}` : tag;
+      updateItemField(itemId, { defectNote: updated });
     }
-    updateItemField(itemId, { status: 'Fail', defectNote: newNote });
   };
 
-  // Toggle specific failed part or slot in remark
-  const handleToggleFailedPart = (itemId: string, partLabel: string) => {
-    const it = items.find((i) => i.id === itemId);
-    const currentNote = it?.defectNote || '';
-    const prefix = `[Failed: ${partLabel}]`;
-
-    let newNote = '';
-    if (currentNote.includes(prefix)) {
-      newNote = currentNote.replace(prefix, '').replace(/;\s*;\s*/g, '; ').trim();
+  const handleToggleFailedPart = (itemId: string, partName: string) => {
+    const current = currentItem.defectNote || '';
+    const tag = `[Failed: ${partName}]`;
+    if (current.includes(tag)) {
+      const updated = current.replace(tag, '').trim();
+      updateItemField(itemId, { defectNote: updated });
     } else {
-      newNote = currentNote ? `${prefix} ${currentNote}` : `${prefix} Issue identified`;
+      const updated = current ? `${tag} ${current}` : `${tag} Component defect detected`;
+      updateItemField(itemId, { defectNote: updated });
     }
-    updateItemField(itemId, { status: 'Fail', defectNote: newNote });
   };
 
-  const handleSystemCheckToggle = (
-    itemId: string,
-    checkKey: string,
-    checkLabel?: string,
-    forceValue?: boolean
-  ) => {
-    const currentItem = items.find((i) => i.id === itemId);
-    if (!currentItem) return;
-
-    const currentChecks = currentItem.systemChecks || {};
-    const willBeChecked = forceValue !== undefined ? forceValue : !(currentChecks[checkKey] !== false);
-    const updatedChecks = {
-      ...currentChecks,
-      [checkKey]: willBeChecked,
-    };
+  const handleSystemCheckToggle = (itemId: string, checkKey: string, checkLabel: string, checked: boolean) => {
+    const currentSysChecks = currentItem.systemChecks || {};
+    const updatedChecks = { ...currentSysChecks, [checkKey]: checked };
 
     const patch: Partial<InspectionCheckItem> = { systemChecks: updatedChecks };
 
-    const activeList = getSystemCheckList();
-    const hasAnyDefect = activeList.some((c) => {
-      if (c.key === checkKey) return !willBeChecked;
-      return updatedChecks[c.key] === false;
-    });
-
-    if (hasAnyDefect) {
+    if (!checked) {
       patch.status = 'Fail';
-      if (!willBeChecked && checkLabel) {
-        const existingNote = currentItem.defectNote || '';
-        const partTag = `[${checkLabel} Faulty]`;
-        if (!existingNote.includes(partTag)) {
-          patch.defectNote = existingNote ? `${partTag}; ${existingNote}` : `${partTag} Inoperative / Needs repair`;
-        }
+      const defectNotice = `[Failed: ${checkLabel}]`;
+      if (!currentItem.defectNote?.includes(defectNotice)) {
+        patch.defectNote = currentItem.defectNote
+          ? `${defectNotice} ${currentItem.defectNote}`
+          : `${defectNotice} Component failure observed`;
       }
     } else {
-      // All items operational -> restore Pass and clear defectNote!
-      patch.status = 'Pass';
-      patch.defectNote = '';
+      const hasOtherFailures = Object.entries(updatedChecks).some(([k, v]) => v === false && k !== checkKey);
+      if (!hasOtherFailures) {
+        patch.status = 'Pass';
+        patch.defectNote = '';
+      }
     }
 
     updateItemField(itemId, patch);
   };
 
-  // Routine day check
-  const isSaturday = isSaturdayInspection();
-
-  // The active checkpoint item for the current card (0 to items.length - 1)
-  const currentItem = items[currentCardIndex] || items[0];
-  const requiredPhotoCount = getCheckpointRequiredPhotoCount(currentItem.id, isSaturday);
-  const itemPhotos = photos.filter((p) => p.itemId === currentItem.id);
-  const slots = getCheckpointSlots(currentItem.id, isSaturday);
-
-  // Checkpoint #6: Dashboard checks default object
-  const currentDashChecks = currentItem.dashboardChecks || {
-    engineLightOff: true,
-    doubleSignalOk: true,
-    batteryLightOff: true,
-    oilLightOff: true,
-  };
-
-  // Validate current card before advancing
-  const validateCurrentCard = (): boolean => {
+  const handleNextCard = () => {
     setCardError('');
 
-    // 1. Check mandatory photos
-    if (requiredPhotoCount > 0 && itemPhotos.length < requiredPhotoCount) {
-      setCardError(
-        `This checkpoint requires ${requiredPhotoCount} photo(s) (${itemPhotos.length} captured). Please take the required photo(s) to proceed.`
-      );
-      return false;
-    }
-
-    // 2. Check defect note if status is Fail
-    if (currentItem.status === 'Fail' && (!currentItem.defectNote || currentItem.defectNote.trim() === '')) {
-      setCardError('This checkpoint is marked as FAIL. Please select the failed part or enter a defect remark.');
-      return false;
-    }
-
-    // 3. Check dashboard specific checklist on card #6 (checkpoint #6)
-    if (currentItem.id === 'dashboard_warnings' && currentItem.status === 'Fail') {
-      if (!currentItem.defectNote || !currentItem.defectNote.trim()) {
-        setCardError('Dashboard warning indicated. Please enter a defect remark before continuing.');
-        return false;
-      }
-    }
-
-    return true;
-  };
-
-  const handleNextCard = () => {
-    if (validateCurrentCard()) {
-      // Ensure systemChecks for current card are captured if not set
-      if (activeCheckList.length > 0 && (!currentItem.systemChecks || Object.keys(currentItem.systemChecks).length === 0)) {
-        const defaults: Record<string, boolean> = {};
-        activeCheckList.forEach((c) => {
-          defaults[c.key] = true;
-        });
-        updateItemField(currentItem.id, { systemChecks: defaults });
-      }
-
-      if (currentCardIndex < items.length - 1) {
-        setCurrentCardIndex(currentCardIndex + 1);
+    // Check mandatory photos
+    if (requiredPhotoCount > 0) {
+      if (slots && slots.length > 0) {
+        const missingSlots = slots.filter(
+          (s) => !photos.some((p) => p.itemId === currentItem.id && p.slotIndex === s.index)
+        );
+        if (missingSlots.length > 0) {
+          const names = missingSlots.map((s) => s.shortLabel || s.name).join(', ');
+          setCardError(`Missing mandatory photos: ${names}. Driver must photograph all slots before next card.`);
+          return;
+        }
       } else {
-        // Completed all 10 cards -> Proceed to Declaration & Meter
-        if (onProceed) onProceed();
+        if (itemPhotos.length < requiredPhotoCount) {
+          setCardError(`Checkpoint #${currentItem.code} requires photo evidence. Tap "Launch Camera" to take photo.`);
+          return;
+        }
       }
+    }
+
+    // Check defect note if Fail
+    if (currentItem.status === 'Fail') {
+      if (!currentItem.defectNote || currentItem.defectNote.trim().length === 0) {
+        setCardError('Defect description is required when checkpoint status is Fail.');
+        return;
+      }
+    }
+
+    // Auto-fill Pass checks if not set
+    if (!currentItem.systemChecks || Object.keys(currentItem.systemChecks).length === 0) {
+      const defaults: Record<string, boolean> = {};
+      activeCheckList.forEach((chk) => {
+        defaults[chk.key] = true;
+      });
+      updateItemField(currentItem.id, { systemChecks: defaults });
+    }
+
+    if (currentCardIndex < items.length - 1) {
+      setCurrentCardIndex(currentCardIndex + 1);
+    } else {
+      // Completed all checkpoints -> Proceed to Declaration & Meter
+      if (onProceed) onProceed();
     }
   };
 
@@ -611,18 +419,22 @@ export const Checklist10Points: React.FC<Props> = ({
     return count >= req;
   };
 
-  // Get active system check list for current card
   const getSystemCheckList = () => {
     return getCheckpointSystemChecks(currentItem.id, isFeeder);
   };
 
   const activeCheckList = getSystemCheckList();
+  const currentDashChecks = currentItem.dashboardChecks || {
+    engineLightOff: true,
+    doubleSignalOk: true,
+    batteryLightOff: true,
+    oilLightOff: true,
+  };
 
   return (
     <div className="max-w-2xl mx-auto h-[calc(100dvh-5.5rem)] min-h-[580px] max-h-[820px] flex flex-col justify-between overflow-hidden">
-      {/* ================= TOP CARD DECK STEPPER (COMPACT) ================= */}
+      {/* ================= TOP CARD DECK STEPPER ================= */}
       <div className="bg-white border border-slate-200 rounded-2xl p-2.5 sm:p-3 shadow-xs text-slate-800 space-y-1.5 flex-shrink-0">
-        {/* Routine Banner & Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <span className="w-6 h-6 rounded-lg bg-blue-600 text-white font-black text-xs flex items-center justify-center shadow-xs">
@@ -649,7 +461,7 @@ export const Checklist10Points: React.FC<Props> = ({
         {/* Routine Type Label */}
         <div className="flex items-center justify-between text-[10px] font-mono font-bold px-1">
           <span className="text-slate-500">
-            {isSaturday ? '📅 Saturday Deep Audit (Full Set • 15 Photos)' : '📅 Mon - Fri Routine (5 Points • 6 Photos • Meter Last)'}
+            {isSaturday ? 'Saturday Deep Audit (Full Set • 15 Photos)' : 'Mon - Fri Routine (5 Points • 6 Photos • Meter Last)'}
           </span>
           <span className="text-slate-400">
             {currentCardIndex + 1} of {items.length} Checkpoints
@@ -664,7 +476,7 @@ export const Checklist10Points: React.FC<Props> = ({
           />
         </div>
 
-        {/* 10 Card Quick Selector Dots */}
+        {/* Card Selector Buttons */}
         <div className="flex items-center justify-between gap-1 overflow-x-auto no-scrollbar">
           {items.map((it, idx) => {
             const completed = isCardCompleted(idx);
@@ -711,7 +523,7 @@ export const Checklist10Points: React.FC<Props> = ({
         </div>
       )}
 
-      {/* ================= ACTIVE CHECKPOINT CARD BODY (ONE PAGE FIT) ================= */}
+      {/* ================= ACTIVE CHECKPOINT CARD BODY ================= */}
       <div className="my-1.5 flex-1 min-h-0 overflow-y-auto bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 space-y-3 shadow-xs text-slate-800">
         {/* Checkpoint Meta Info */}
         <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
@@ -737,12 +549,149 @@ export const Checklist10Points: React.FC<Props> = ({
           )}
         </div>
 
-        {/* 1. PHOTO SECTION */}
+        {/* PROMINENT MANDATORY NOTICE BANNER */}
+        {currentItem.id === 'dashboard_warnings' ? (
+          <div className="bg-amber-400 text-slate-950 p-2.5 rounded-xl text-xs font-black shadow-xs border-2 border-amber-500 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xl flex-shrink-0">🔑</span>
+              <div>
+                <span className="text-[11px] uppercase tracking-wider font-black block">
+                  START ENGINE FIRST (Truck running)
+                </span>
+                <span className="text-[10px] font-bold text-slate-900 block">
+                  Keep cluster lit + Flashlight ON (⚡)
+                </span>
+              </div>
+            </div>
+            <div className="bg-slate-950 text-amber-400 px-2.5 py-1 rounded-lg text-[10px] font-black flex items-center gap-1 flex-shrink-0">
+              <Zap className="w-3.5 h-3.5 fill-current animate-pulse" />
+              <span>FLASH ON</span>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-amber-400 text-slate-950 px-3 py-2 rounded-xl text-xs font-black flex items-center justify-between shadow-xs border-2 border-amber-500">
+            <div className="flex items-center gap-2">
+              <div className="p-1 bg-slate-950 text-amber-400 rounded-lg flex-shrink-0">
+                <Zap className="w-3.5 h-3.5 fill-current animate-pulse" />
+              </div>
+              <div>
+                <span className="text-[11px] uppercase tracking-wider font-black block">
+                  ⚡ MANDATORY: FLASHLIGHT ON (⚡)
+                </span>
+                <span className="text-[10px] font-bold text-slate-900 block">
+                  Turn on camera flash before capturing
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* EXAMPLE PHOTO GUIDE FOR THIS CHECKPOINT */}
+        {exampleGuide && (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 text-white space-y-2 shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+                <span className="text-[11px] font-black uppercase tracking-wider text-emerald-300 font-mono truncate">
+                  📸 Example Photo: {displayExampleTitle}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setPreviewExample({
+                    ...exampleGuide,
+                    title: displayExampleTitle,
+                    realPhotoPath: displayExamplePhoto,
+                    fileName: displayExampleFileName,
+                  })
+                }
+                className="text-[10px] text-blue-400 hover:text-blue-300 font-bold flex items-center gap-1 cursor-pointer bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-700 flex-shrink-0"
+              >
+                <ZoomIn className="w-3 h-3" />
+                <span>Enlarge</span>
+              </button>
+            </div>
+
+            {/* If checkpoint has multiple slots (e.g. Tyres: Front-L, Front-R, Rear-L, Rear-R): Provide quick switcher buttons */}
+            {slots && slots.length > 1 && (
+              <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
+                <span className="text-[9px] font-bold text-slate-400 font-mono uppercase tracking-wider mr-0.5 flex-shrink-0">
+                  Select Tyre/Slot:
+                </span>
+                {slots.map((s) => {
+                  const isSelected = activeSlotIndex === s.index;
+                  return (
+                    <button
+                      key={s.index}
+                      type="button"
+                      onClick={() => setActiveSlotIndex(s.index)}
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition border cursor-pointer whitespace-nowrap flex items-center gap-1 ${
+                        isSelected
+                          ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-black shadow-xs'
+                          : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-750'
+                      }`}
+                    >
+                      <span>{s.shortLabel || s.name}</span>
+                      {exampleGuide?.slots?.[s.index] && (
+                        <span className="text-[8px] opacity-75">📸</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Clickable Large Example Photo Preview Thumbnail (h-48 sm:h-56 for big, clear visual guide) */}
+            <div
+              onClick={() =>
+                setPreviewExample({
+                  ...exampleGuide,
+                  title: displayExampleTitle,
+                  realPhotoPath: displayExamplePhoto,
+                  fileName: displayExampleFileName,
+                })
+              }
+              className="relative w-full h-48 sm:h-56 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 flex items-center justify-center cursor-pointer group shadow-inner"
+              title="Click to zoom standard example"
+            >
+              <img
+                src={displayExamplePhoto}
+                alt={displayExampleTitle}
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (target.src !== exampleGuide.exampleImageSvg) {
+                    target.src = exampleGuide.exampleImageSvg;
+                  }
+                }}
+                className="w-full h-full object-contain group-hover:scale-102 transition duration-200"
+              />
+              <div className="absolute inset-0 bg-black/10 group-hover:bg-transparent transition" />
+              <div className="absolute bottom-2 left-2 bg-black/85 backdrop-blur-xs px-2.5 py-1 rounded-md text-[10px] text-slate-200 font-mono flex items-center gap-1.5 border border-white/10 shadow-sm">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="font-bold">{displayExampleFileName || 'Standard Example'}</span>
+                <span className="text-slate-400 text-[9px]">• Tap to zoom</span>
+              </div>
+            </div>
+
+            {/* Short & Simple Guideline Instructions */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 pt-0.5">
+              {exampleGuide.instructions.map((inst, i) => (
+                <div key={i} className="text-[11px] text-slate-200 flex items-center gap-1.5 font-medium leading-tight">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                  <span>{inst}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 1. PHOTO SECTION: DIRECT NATIVE CAMERA LAUNCH */}
         {slots && slots.length > 0 ? (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 uppercase tracking-wider">
               <span>Photo Slots ({slots.length} Required) *</span>
-              <span className="text-slate-400 font-normal">Tap slot to capture</span>
+              <span className="text-slate-400 font-normal">Tap button to open native camera</span>
             </div>
 
             <div className={`grid gap-2 ${slots.length > 2 ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-1 sm:grid-cols-2'}`}>
@@ -754,23 +703,35 @@ export const Checklist10Points: React.FC<Props> = ({
                 return (
                   <div
                     key={slot.index}
-                    className="bg-slate-50 border border-slate-200 rounded-xl p-2 space-y-1.5 shadow-2xs"
+                    onClick={() => setActiveSlotIndex(slot.index)}
+                    className={`border rounded-xl p-2 space-y-1.5 shadow-2xs transition cursor-pointer ${
+                      activeSlotIndex === slot.index
+                        ? 'bg-blue-50/70 border-blue-400 ring-1 ring-blue-400'
+                        : 'bg-slate-50 border-slate-200 hover:bg-slate-100/60'
+                    }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-slate-800 truncate" title={slot.name}>
-                        {slot.shortLabel || slot.name}
-                      </span>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-[11px] font-bold text-slate-800 truncate" title={slot.name}>
+                          {slot.shortLabel || slot.name}
+                        </span>
+                        {exampleGuide?.slots?.[slot.index]?.fileName && (
+                          <span className="text-[9px] text-slate-400 font-mono truncate">
+                            {exampleGuide.slots[slot.index].fileName}
+                          </span>
+                        )}
+                      </div>
                       {photo ? (
-                        <span className="text-[9px] text-emerald-700 font-bold bg-emerald-50 border border-emerald-200 px-1 rounded">
+                        <span className="text-[9px] text-emerald-700 font-bold bg-emerald-50 border border-emerald-200 px-1 rounded flex-shrink-0">
                           ✓ Done
                         </span>
                       ) : (
-                        <span className="text-[9px] text-amber-600 font-bold">Required</span>
+                        <span className="text-[9px] text-amber-600 font-bold flex-shrink-0">Required</span>
                       )}
                     </div>
 
                     {photo ? (
-                      <div className="relative rounded-lg overflow-hidden h-20 bg-slate-900 shadow-xs">
+                      <div className="relative rounded-lg overflow-hidden h-24 bg-slate-900 shadow-xs">
                         <img
                           src={photo.url}
                           alt={slot.name}
@@ -784,15 +745,15 @@ export const Checklist10Points: React.FC<Props> = ({
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
-                        <div className="absolute bottom-1 left-1 text-[8px] text-white bg-black/60 px-1 py-0.2 rounded font-mono">
-                          ✓ Stamped
+                        <div className="absolute bottom-1 left-1 text-[8px] text-white bg-black/70 px-1 py-0.2 rounded font-mono">
+                          ✓ Stamped Frame
                         </div>
                       </div>
                     ) : (
                       <button
                         type="button"
                         onClick={() =>
-                          openCameraModal({
+                          triggerNativeCamera({
                             id: currentItem.id,
                             title: currentItem.title,
                             isDefect: false,
@@ -801,10 +762,34 @@ export const Checklist10Points: React.FC<Props> = ({
                             slotName: slot.name,
                           })
                         }
-                        className="w-full h-20 border border-dashed border-blue-300 bg-white hover:bg-blue-50/50 rounded-lg flex flex-col items-center justify-center gap-1 cursor-pointer transition text-blue-600 p-1"
+                        className={`w-full h-24 border-2 border-dashed rounded-xl flex flex-col items-center justify-center gap-1.5 cursor-pointer transition p-2 active:scale-98 ${
+                          currentItem.id === 'dashboard_warnings'
+                            ? 'border-amber-500 bg-amber-50/70 hover:bg-amber-100 text-amber-950'
+                            : 'border-blue-400 bg-blue-50/40 hover:bg-blue-100/60 text-blue-700'
+                        }`}
                       >
-                        <Camera className="w-5 h-5 text-blue-500" />
-                        <span className="text-[10px] font-bold text-center leading-tight">Capture {slot.shortLabel || slot.name}</span>
+                        <div className="flex items-center gap-1 bg-amber-400 text-slate-950 px-2 py-0.5 rounded-full text-[9px] font-black shadow-xs">
+                          {currentItem.id === 'dashboard_warnings' ? (
+                            <>
+                              <span>🔑 START ENGINE</span>
+                              <span>•</span>
+                              <Zap className="w-3 h-3 fill-current" />
+                              <span>FLASH ON</span>
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="w-3 h-3 fill-current" />
+                              <span>FLASH ON (⚡)</span>
+                            </>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs font-black">
+                          <Camera className="w-4 h-4 text-blue-600" />
+                          <span>{currentItem.id === 'dashboard_warnings' ? 'Start Engine & Take Meter Photo' : `Capture ${slot.shortLabel || slot.name}`}</span>
+                        </div>
+                        <span className="text-[9px] text-slate-500 font-medium">
+                          {currentItem.id === 'dashboard_warnings' ? 'Start engine + flash ON' : 'Turn ON camera flash (⚡)'}
+                        </span>
                       </button>
                     )}
                   </div>
@@ -815,11 +800,18 @@ export const Checklist10Points: React.FC<Props> = ({
         ) : requiredPhotoCount > 0 ? (
           /* Single photo slot */
           <div className="space-y-1.5">
-            <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-              Verification Photo (Mandatory) *
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                Verification Photo (Mandatory) *
+              </label>
+              {exampleGuide?.fileName && (
+                <span className="text-[10px] text-slate-500 font-mono font-medium">
+                  File: {exampleGuide.fileName}
+                </span>
+              )}
+            </div>
             {itemPhotos.length > 0 ? (
-              <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-900 h-28 shadow-xs">
+              <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-900 h-32 shadow-xs">
                 <img
                   src={itemPhotos[0].url}
                   alt={currentItem.title}
@@ -828,37 +820,60 @@ export const Checklist10Points: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={() => handleDeleteSlotPhoto(currentItem.id)}
-                  className="absolute top-1.5 right-1.5 p-1 bg-rose-600 text-white rounded-lg shadow-sm hover:bg-rose-700 cursor-pointer"
+                  className="absolute top-2 right-2 p-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg cursor-pointer shadow-sm"
                   title="Retake photo"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
-                <div className="absolute bottom-1.5 left-1.5 text-[9px] text-white bg-black/60 px-1.5 py-0.5 rounded font-mono">
-                  ✓ Verified & Watermarked
+                <div className="absolute bottom-2 left-2 text-[9px] text-white bg-black/70 px-2 py-0.5 rounded font-mono">
+                  ✓ Anti-Tamper Frame & Watermark Stamped
                 </div>
               </div>
             ) : (
               <button
                 type="button"
                 onClick={() =>
-                  openCameraModal({
+                  triggerNativeCamera({
                     id: currentItem.id,
                     title: currentItem.title,
                     isDefect: false,
                     code: currentItem.code,
-                    slotName: currentItem.title,
                   })
                 }
-                className="w-full py-4 border border-dashed border-blue-300 bg-blue-50/50 hover:bg-blue-50 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-blue-700 text-xs font-bold"
+                className={`w-full h-24 border-2 border-dashed rounded-xl flex flex-col items-center justify-center gap-1.5 cursor-pointer transition p-2 active:scale-98 ${
+                  currentItem.id === 'dashboard_warnings'
+                    ? 'border-amber-500 bg-amber-50/70 hover:bg-amber-100 text-amber-950'
+                    : 'border-blue-400 bg-blue-50/40 hover:bg-blue-100/60 text-blue-700'
+                }`}
               >
-                <Camera className="w-5 h-5 text-blue-600" />
-                <span>Tap to Launch Camera & Capture Photo</span>
+                <div className="flex items-center gap-1 bg-amber-400 text-slate-950 px-2.5 py-0.5 rounded-full text-[10px] font-black shadow-xs">
+                  {currentItem.id === 'dashboard_warnings' ? (
+                    <>
+                      <span>🔑 START ENGINE</span>
+                      <span>•</span>
+                      <Zap className="w-3.5 h-3.5 fill-current" />
+                      <span>FLASH ON</span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-3.5 h-3.5 fill-current" />
+                      <span>FLASH ON (⚡)</span>
+                    </>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 text-xs font-black">
+                  <Camera className="w-4 h-4 text-blue-600" />
+                  <span>{currentItem.id === 'dashboard_warnings' ? 'Start Engine & Open Camera' : 'Launch Camera & Take Photo'}</span>
+                </div>
+                <span className="text-[9px] text-slate-500 font-medium">
+                  {currentItem.id === 'dashboard_warnings' ? 'Start engine + flash ON' : 'Turn ON camera flash (⚡)'}
+                </span>
               </button>
             )}
           </div>
         ) : null}
 
-        {/* 2. CHECKBOXES SECTION (COMPACT) */}
+        {/* 2. CHECKBOXES SECTION */}
         {activeCheckList.length > 0 && (
           <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 text-xs">
             <span className="font-bold text-slate-800 text-[11px] block">
@@ -995,7 +1010,7 @@ export const Checklist10Points: React.FC<Props> = ({
             </button>
           </div>
 
-          {/* DEFECT DETAILS SECTION IF FAIL (REQUEST #7 IMPLEMENTATION) */}
+          {/* DEFECT DETAILS SECTION IF FAIL */}
           {currentItem.status === 'Fail' && (
             <div className="space-y-2 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs">
               {/* If multiple photo slots: choose which part/slot failed */}
@@ -1127,203 +1142,181 @@ export const Checklist10Points: React.FC<Props> = ({
         </button>
       </div>
 
-      {/* ================= CAMERA CAPTURE MODAL (FIXED DIMENSIONS, ZERO RESIZE POP) ================= */}
-      {activeTarget && (
+      {/* ================= ENLARGED SAMPLE GUIDE MODAL ================= */}
+      {previewExample && (
         <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-3 backdrop-blur-xs">
-          <div className="w-full max-w-md h-[500px] max-h-[85vh] bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col">
-            {/* Modal Header */}
-            <div className="p-3 bg-slate-800/90 border-b border-slate-700 flex items-center justify-between text-white flex-shrink-0">
-              <div className="truncate mr-2">
-                <div className="text-[10px] font-mono text-blue-400 font-bold uppercase truncate">
-                  {activeTarget.slotName ? `${activeTarget.slotName}` : `Checkpoint #${activeTarget.code}`}
-                </div>
-                <h4 className="text-xs font-black truncate">{activeTarget.title}</h4>
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col text-white">
+            <div className="p-3.5 bg-slate-800/90 border-b border-slate-700 flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                <h3 className="text-xs font-black truncate">{previewExample.title} - Standard Sample</h3>
               </div>
+              <button
+                type="button"
+                onClick={() => setPreviewExample(null)}
+                className="p-1.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-slate-300 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-              <div className="flex items-center gap-2 flex-shrink-0">
-                {torchSupported ? (
-                  <button
-                    type="button"
-                    onClick={toggleTorch}
-                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1 transition cursor-pointer border ${
-                      torchActive
-                        ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-md shadow-amber-400/40 animate-pulse'
-                        : 'bg-slate-700 hover:bg-slate-600 text-amber-300 border-amber-400/30'
-                    }`}
-                    title="Toggle Flashlight / Torch"
-                  >
-                    <Zap className={`w-3.5 h-3.5 ${torchActive ? 'fill-current text-slate-950' : 'text-amber-400'}`} />
-                    <span>{torchActive ? '⚡ Flash ON' : '🔦 Flashlight'}</span>
-                  </button>
-                ) : (
-                  <div className="px-2 py-0.5 rounded-lg bg-amber-500/20 border border-amber-400/30 text-[10px] text-amber-300 font-bold flex items-center gap-1">
-                    <Zap className="w-3 h-3 text-amber-400" />
-                    <span>Dawn operation: use flashlight</span>
+            <div className="p-3.5 space-y-3 overflow-y-auto max-h-[75vh]">
+              <div className="w-full aspect-[16/10] bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center p-1 relative">
+                <img
+                  src={previewExample.realPhotoPath || previewExample.exampleImageSvg}
+                  alt={previewExample.title}
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    if (target.src !== previewExample.exampleImageSvg) {
+                      target.src = previewExample.exampleImageSvg;
+                    }
+                  }}
+                  className="w-full h-full object-contain"
+                />
+                {previewExample.fileName && (
+                  <div className="absolute top-2 right-2 bg-black/80 backdrop-blur-xs text-[10px] font-mono text-emerald-300 px-2 py-0.5 rounded-md border border-emerald-500/30">
+                    File: {previewExample.fileName}
                   </div>
                 )}
-
-                <button
-                  type="button"
-                  onClick={closeCameraModal}
-                  className="p-1.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-slate-300 hover:text-white cursor-pointer flex-shrink-0"
-                >
-                  <X className="w-4 h-4" />
-                </button>
               </div>
-            </div>
 
-            {/* Flashlight Notification Banner for Early Dawn Operations */}
-            <div className="bg-amber-400 text-slate-950 px-3 py-1 text-[11px] font-black flex items-center justify-between shadow-xs flex-shrink-0">
-              <div className="flex items-center gap-1.5 truncate">
-                <Zap className="w-3.5 h-3.5 fill-current text-slate-950 flex-shrink-0" />
-                <span className="truncate">Early Dawn Dim Light: Please turn on flashlight / torch before photo!</span>
-              </div>
-              {torchSupported && (
-                <button
-                  type="button"
-                  onClick={toggleTorch}
-                  className="underline text-[10px] font-bold cursor-pointer hover:text-slate-800 ml-1 flex-shrink-0"
-                >
-                  {torchActive ? 'Turn Off' : 'Turn On'}
-                </button>
-              )}
-            </div>
-
-            {/* Live Camera Viewport with FIXED Dimensions */}
-            <div className="relative flex-1 w-full bg-black flex items-center justify-center overflow-hidden">
-              <video
-                ref={videoRef}
-                playsInline
-                muted
-                autoPlay
-                className={`w-full h-full object-cover transition-opacity duration-200 ${cameraActive ? 'opacity-100' : 'opacity-0'}`}
-                style={{ transform: `scale(${zoomLevel})` }}
-              />
-
-              {/* Instant Loading State (Prevents small-then-big layout jump) */}
-              {!cameraActive && !cameraError && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-slate-400 space-y-2 p-4">
-                  <RefreshCw className="w-7 h-7 text-blue-500 animate-spin" />
-                  <span className="text-xs font-mono font-medium">Initializing camera stream...</span>
-                </div>
-              )}
-
-              {/* Watermark Live Stamp Badge */}
-              {cameraActive && (
-                <div className="absolute top-2 left-2 bg-black/75 backdrop-blur-xs px-2 py-1 rounded-lg text-[9px] text-white font-mono space-y-0.5 border border-white/10 pointer-events-none">
-                  <div className="font-bold text-amber-400">{vehicle.vehicleNo}</div>
-                  <div>{driver.name} ({driver.loginId})</div>
-                  <div className="text-slate-300">
-                    {gpsInfo ? `${gpsInfo.lat.toFixed(4)}°N, ${gpsInfo.lng.toFixed(4)}°E` : 'Live GPS Stamping'}
+              {/* MANDATORY FLASHLIGHT & ENGINE NOTICE IN PREVIEW */}
+              {previewExample.id === 'dashboard_warnings' ? (
+                <div className="bg-amber-400 text-slate-950 p-2.5 rounded-xl border-2 border-amber-500 flex items-center justify-between gap-2 shadow-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🔑</span>
+                    <div>
+                      <span className="text-xs font-black uppercase block">
+                        Start engine first (Truck running)
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-900 block">
+                        Turn ON camera flash (⚡)
+                      </span>
+                    </div>
                   </div>
                 </div>
+              ) : (
+                <div className="bg-amber-400 text-slate-950 p-2 rounded-xl border border-amber-500 flex items-center gap-2 text-xs font-black shadow-xs">
+                  <Zap className="w-3.5 h-3.5 fill-current flex-shrink-0 animate-pulse" />
+                  <span>Turn ON camera flashlight (⚡)</span>
+                </div>
               )}
 
-              {/* Zoom Buttons */}
-              {cameraActive && (
-                <div className="absolute top-2 right-2 flex flex-col gap-1 z-20">
-                  {[1, 2, 3].map((z) => (
-                    <button
-                      key={z}
-                      type="button"
-                      onClick={() => applyZoomToTrack(z)}
-                      className={`w-7 h-7 rounded-lg text-[10px] font-black font-mono transition cursor-pointer ${
-                        zoomLevel === z ? 'bg-blue-600 text-white' : 'bg-black/60 text-white hover:bg-black/80'
-                      }`}
-                    >
-                      {z}x
-                    </button>
+              <div className="space-y-1 bg-slate-800/60 p-2.5 rounded-xl border border-slate-700/60">
+                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
+                  Guide:
+                </span>
+                <p className="text-xs text-slate-200">
+                  {previewExample.description}
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block flex items-center gap-1">
+                  <Zap className="w-3 h-3 fill-current" />
+                  <span>Instructions:</span>
+                </span>
+                <div className="space-y-1">
+                  {previewExample.instructions.map((inst, i) => (
+                    <div key={i} className="text-xs text-slate-200 flex items-center gap-2 bg-slate-800/40 p-2 rounded-lg border border-slate-700/40 font-medium">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+                      <span>{inst}</span>
+                    </div>
                   ))}
                 </div>
-              )}
-
-              {/* Standardized Photo Taking Frame Marker & Guidance Overlay */}
-              {cameraActive && activeTarget && (
-                <CameraFrameOverlay
-                  itemId={activeTarget.id}
-                  slotIndex={activeTarget.slotIndex}
-                  slotName={activeTarget.slotName}
-                  isDefect={activeTarget.isDefect}
-                  vehicleBrand={vehicle.brand}
-                  vehicleModel={vehicle.model}
-                  torchActive={torchActive}
-                />
-              )}
-
-              {cameraError && (
-                <div className="absolute inset-0 bg-slate-900/95 p-4 flex flex-col items-center justify-center text-center text-white space-y-2">
-                  <AlertTriangle className="w-7 h-7 text-amber-400" />
-                  <p className="text-xs text-slate-300 max-w-xs">{cameraError}</p>
-                  <button
-                    type="button"
-                    onClick={() => nativeCameraInputRef.current?.click()}
-                    className="bg-blue-600 hover:bg-blue-700 px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer"
-                  >
-                    Open Device Camera
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Modal Footer Controls */}
-            <div className="p-3 bg-slate-800 border-t border-slate-700 flex items-center justify-between gap-2 flex-shrink-0">
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => nativeCameraInputRef.current?.click()}
-                  className="text-[11px] text-slate-300 hover:text-white bg-slate-700 px-3 py-2 rounded-xl transition cursor-pointer flex items-center gap-1"
-                >
-                  <Camera className="w-3.5 h-3.5" />
-                  <span>Native Camera (Flash)</span>
-                </button>
-
-                {torchSupported && (
-                  <button
-                    type="button"
-                    onClick={toggleTorch}
-                    className={`p-2 rounded-xl border transition cursor-pointer ${
-                      torchActive
-                        ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-sm'
-                        : 'bg-slate-700 text-amber-300 border-amber-400/30 hover:bg-slate-600'
-                    }`}
-                    title="Toggle Flashlight / Torch"
-                  >
-                    <Zap className={`w-4 h-4 ${torchActive ? 'fill-current text-slate-950' : 'text-amber-400'}`} />
-                  </button>
-                )}
               </div>
 
               <button
                 type="button"
-                disabled={isProcessingPhoto}
-                onClick={captureLivePhoto}
-                className="bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-extrabold text-xs px-5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-md shadow-blue-600/30 cursor-pointer disabled:opacity-50"
+                onClick={() => setPreviewExample(null)}
+                className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 rounded-xl text-xs font-black text-white transition cursor-pointer"
               >
-                {isProcessingPhoto ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Watermarking...</span>
-                  </>
-                ) : (
-                  <>
-                    <Camera className="w-3.5 h-3.5" />
-                    <span>Capture & Stamp</span>
-                  </>
-                )}
+                Got It
               </button>
-
-              <input
-                ref={nativeCameraInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={handleNativeCameraCapture}
-                className="hidden"
-              />
             </div>
           </div>
         </div>
       )}
+
+      {/* ================= METER START ENGINE MANDATORY CONFIRMATION MODAL ================= */}
+      {pendingMeterTarget && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-slate-900 border-2 border-amber-400 rounded-3xl p-4 text-white shadow-2xl space-y-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-xl bg-amber-400 flex items-center justify-center text-slate-950 text-xl font-black shadow-md flex-shrink-0">
+                🔑
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-black text-amber-400 leading-tight">
+                  START VEHICLE ENGINE FIRST!
+                </h3>
+                <p className="text-[10px] text-slate-300">
+                  Truck engine must be running
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-3 space-y-1.5 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="w-4 h-4 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center flex-shrink-0 text-[10px]">
+                  1
+                </span>
+                <p className="text-slate-200 font-medium">
+                  <strong>Start engine:</strong> Dashboard & odometer must be lit.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-4 h-4 rounded-full bg-amber-400 text-slate-950 font-black flex items-center justify-center flex-shrink-0 text-[10px]">
+                  2
+                </span>
+                <p className="text-slate-200 font-medium">
+                  <strong>Flash ON (⚡):</strong> Camera flash required for clear digits.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-1.5 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const target = pendingMeterTarget;
+                  setPendingMeterTarget(null);
+                  executeNativeCameraLaunch(target);
+                }}
+                className="w-full py-3 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl text-xs font-black transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md active:scale-98"
+              >
+                <span>🚗 YES, ENGINE STARTED — OPEN CAMERA</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingMeterTarget(null)}
+                className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-[11px] font-bold transition cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= PROCESSING & STAMPING OVERLAY ================= */}
+      {isProcessingPhoto && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex flex-col items-center justify-center p-4 backdrop-blur-xs text-white space-y-3">
+          <RefreshCw className="w-10 h-10 text-blue-500 animate-spin" />
+          <p className="text-sm font-black">Stamping Verification Frame & Watermark...</p>
+          <p className="text-xs text-slate-400 font-mono">Adding Live GPS Coordinates & Anti-Tamper Stamp</p>
+        </div>
+      )}
+
+      {/* ================= HIDDEN NATIVE CAMERA FILE INPUT ================= */}
+      <input
+        ref={nativeCameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={handleNativeCameraCapture}
+        className="hidden"
+      />
     </div>
   );
 };
