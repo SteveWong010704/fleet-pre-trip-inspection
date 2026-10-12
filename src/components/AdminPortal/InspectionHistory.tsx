@@ -35,10 +35,12 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import { getCheckpointSystemChecks } from '../../lib/quickChecklistConfig';
+import { SecurityPasswordModal } from '../SecurityPasswordModal';
 
 export const InspectionHistory: React.FC = () => {
   const [inspections, setInspections] = useState<InspectionRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [showClearConfirmModal, setShowClearConfirmModal] = useState<boolean>(false);
   
   // Filter States (Supporting Multi-Select Condition)
   const [search, setSearch] = useState<string>('');
@@ -282,11 +284,9 @@ export const InspectionHistory: React.FC = () => {
     setCurrentPage(1);
   };
 
-  const handleClearAllInspections = async () => {
-    if (confirm('Are you sure you want to clear all inspection records? All vehicles will be reset to Pending Inspection.')) {
-      await clearAllInspections();
-      loadInspections();
-    }
+  const handleConfirmClearAll = async (password: string) => {
+    await clearAllInspections(password);
+    await loadInspections();
   };
 
   // Export to Excel (.xlsx)
@@ -595,9 +595,9 @@ export const InspectionHistory: React.FC = () => {
 
             {inspections.length > 0 && (
               <button
-                onClick={handleClearAllInspections}
+                onClick={() => setShowClearConfirmModal(true)}
                 className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold px-3 py-2 rounded-xl flex items-center space-x-1.5 shadow-sm transition cursor-pointer"
-                title="Clear all inspection records"
+                title="Clear all inspection records (Requires master password)"
               >
                 <Trash2 className="w-4 h-4" />
                 <span>Clear All</span>
@@ -1942,6 +1942,17 @@ export const InspectionHistory: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Master Security Confirmation for Delete All */}
+      <SecurityPasswordModal
+        isOpen={showClearConfirmModal}
+        title="Delete All Inspection Records"
+        description="Are you sure you want to permanently delete all inspection audit records? This operation cannot be undone. All fleet vehicles will be reset to Pending Inspection."
+        actionButtonText="Authorize & Delete All"
+        isDestructive={true}
+        onConfirm={handleConfirmClearAll}
+        onClose={() => setShowClearConfirmModal(false)}
+      />
     </div>
   );
 };
