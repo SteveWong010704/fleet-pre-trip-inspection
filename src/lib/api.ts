@@ -87,9 +87,15 @@ export async function verifyVehicleQr(plate: string, token: string): Promise<{ v
   return { valid: data.valid ?? false, vehicle: data.vehicle, message: data.message };
 }
 
-export async function regenerateVehicleQrToken(plate: string): Promise<Vehicle> {
+export async function regenerateVehicleQrToken(plate: string, securityPassword?: string): Promise<Vehicle> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (securityPassword) {
+    headers['X-Security-Password'] = securityPassword;
+  }
   const res = await authFetch(`/api/vehicles/${encodeURIComponent(plate)}/regenerate-qr-token`, {
     method: 'POST',
+    headers,
+    body: JSON.stringify({ securityPassword }),
   });
   const data = await res.json();
   if (!data.success) throw new Error(data.message || 'Failed to regenerate vehicle QR token');
@@ -107,11 +113,15 @@ export async function createVehicle(vehicleData: Partial<Vehicle>): Promise<Vehi
   return data.vehicle;
 }
 
-export async function updateVehicle(vehicleNo: string, updates: Partial<Vehicle>): Promise<Vehicle> {
+export async function updateVehicle(vehicleNo: string, updates: Partial<Vehicle>, securityPassword?: string): Promise<Vehicle> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (securityPassword) {
+    headers['X-Security-Password'] = securityPassword;
+  }
   const res = await authFetch('/api/vehicles/update', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ vehicleNo, updates }),
+    headers,
+    body: JSON.stringify({ vehicleNo, updates, securityPassword }),
   });
   const data = await res.json();
   if (!data.success) throw new Error(data.message || 'Failed to update vehicle');
@@ -275,32 +285,66 @@ export async function fetchAuditLogs(): Promise<AuditLog[]> {
   return data.logs || [];
 }
 
-export async function clearAllInspections(): Promise<boolean> {
+export async function clearAllInspections(securityPassword?: string): Promise<boolean> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (securityPassword) {
+    headers['X-Security-Password'] = securityPassword;
+  }
   const res = await authFetch('/api/inspections', {
     method: 'DELETE',
+    headers,
+    body: JSON.stringify({ securityPassword }),
   });
-  return res.ok;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'Failed to clear inspection records');
+  }
+  return true;
 }
 
-export async function clearAllFleetData(): Promise<{ success: boolean; message: string }> {
+export async function clearAllFleetData(securityPassword?: string): Promise<{ success: boolean; message: string }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (securityPassword) {
+    headers['X-Security-Password'] = securityPassword;
+  }
   const res = await authFetch('/api/storage/clear-all', {
     method: 'POST',
+    headers,
+    body: JSON.stringify({ securityPassword }),
   });
-  return await res.json();
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || data.error || 'Failed to clear fleet data');
+  return data;
 }
 
-export async function clearAllVehicles(): Promise<{ success: boolean; message: string }> {
+export async function clearAllVehicles(securityPassword?: string): Promise<{ success: boolean; message: string }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (securityPassword) {
+    headers['X-Security-Password'] = securityPassword;
+  }
   const res = await authFetch('/api/vehicles/clear-all', {
     method: 'POST',
+    headers,
+    body: JSON.stringify({ securityPassword }),
   });
-  return await res.json();
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || data.error || 'Failed to clear vehicles');
+  return data;
 }
 
-export async function clearAllDrivers(): Promise<{ success: boolean; message: string }> {
+export async function clearAllDrivers(securityPassword?: string): Promise<{ success: boolean; message: string }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (securityPassword) {
+    headers['X-Security-Password'] = securityPassword;
+  }
   const res = await authFetch('/api/drivers/clear-all', {
     method: 'POST',
+    headers,
+    body: JSON.stringify({ securityPassword }),
   });
-  return await res.json();
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || data.error || 'Failed to clear drivers');
+  return data;
 }
 
 export async function bulkUploadVehicles(vehicles: Partial<Vehicle>[]) {

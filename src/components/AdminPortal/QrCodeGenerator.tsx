@@ -28,6 +28,7 @@ import {
   isLocalOrPrivateHost,
   syncPublicBaseUrlFromServer,
 } from '../../lib/publicUrl';
+import { SecurityPasswordModal } from '../SecurityPasswordModal';
 
 export const QrCodeGenerator: React.FC = () => {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -106,7 +107,10 @@ export const QrCodeGenerator: React.FC = () => {
   const availableTonnages = useMemo(() => {
     const set = new Set<number>();
     vehicles.forEach(v => {
-      if (v.tonnage) set.add(v.tonnage);
+      if (v.tonnage !== undefined && v.tonnage !== null) {
+        const num = typeof v.tonnage === 'number' ? v.tonnage : parseFloat(String(v.tonnage));
+        if (!isNaN(num)) set.add(num);
+      }
     });
     return Array.from(set).sort((a, b) => a - b);
   }, [vehicles]);
@@ -180,28 +184,62 @@ export const QrCodeGenerator: React.FC = () => {
     }
   }, [displayedVehicles, publicUrlInput]);
 
-  // Save public URL
-  const handleSavePublicUrl = async () => {
-    const cleaned = await setPublicBaseUrl(publicUrlInput.trim());
-    setIsSavedUrl(true);
-    setTimeout(() => setIsSavedUrl(false), 3000);
-    // Clear cache and regenerate for the current tab with new URL
-    setQrMap({});
-    if (displayedVehicles.length > 0) {
-      await generateQrsForSubset(displayedVehicles, cleaned, true);
-    }
+  // Security password modal state
+  const [securityModalConfig, setSecurityModalConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    description: string;
+    actionText?: string;
+    isDestructive?: boolean;
+    onConfirm: (password: string) => Promise<void> | void;
+  }>({
+    isOpen: false,
+    title: '',
+    description: '',
+    onConfirm: () => {},
+  });
+
+  // Save public URL (Requires master security password MightY99/.1234)
+  const handleRequestSavePublicUrl = () => {
+    const trimmed = publicUrlInput.trim();
+    setSecurityModalConfig({
+      isOpen: true,
+      title: 'Authorize QR Link Modification',
+      description: `Updating the public QR domain to "${trimmed}". All generated decals and deep links will encode this public endpoint. Enter the master password to authorize this change.`,
+      actionText: 'Authorize & Save Link',
+      isDestructive: false,
+      onConfirm: async (password: string) => {
+        const cleaned = await setPublicBaseUrl(trimmed, password);
+        setIsSavedUrl(true);
+        setTimeout(() => setIsSavedUrl(false), 3000);
+        setQrMap({});
+        if (displayedVehicles.length > 0) {
+          await generateQrsForSubset(displayedVehicles, cleaned, true);
+        }
+      },
+    });
   };
 
-  const handleResetToOrigin = async () => {
+  // Reset public URL (Requires master security password MightY99/.1234)
+  const handleRequestResetToOrigin = () => {
     const origin = window.location.origin;
-    setPublicUrlInput(origin);
-    await setPublicBaseUrl(origin);
-    setIsSavedUrl(true);
-    setTimeout(() => setIsSavedUrl(false), 3000);
-    setQrMap({});
-    if (displayedVehicles.length > 0) {
-      await generateQrsForSubset(displayedVehicles, origin, true);
-    }
+    setSecurityModalConfig({
+      isOpen: true,
+      title: 'Authorize QR Link Reset',
+      description: `Resetting the public QR scan domain back to current browser origin (${origin}). Enter the master password to authorize this reset.`,
+      actionText: 'Authorize & Reset Link',
+      isDestructive: true,
+      onConfirm: async (password: string) => {
+        setPublicUrlInput(origin);
+        await setPublicBaseUrl(origin, password);
+        setIsSavedUrl(true);
+        setTimeout(() => setIsSavedUrl(false), 3000);
+        setQrMap({});
+        if (displayedVehicles.length > 0) {
+          await generateQrsForSubset(displayedVehicles, origin, true);
+        }
+      },
+    });
   };
 
   const handleCopyLink = (plate: string) => {
@@ -402,7 +440,7 @@ export const QrCodeGenerator: React.FC = () => {
 
           <button
             type="button"
-            onClick={handleSavePublicUrl}
+            onClick={handleRequestSavePublicUrl}
             className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer flex-shrink-0"
           >
             {isSavedUrl ? <Check className="w-4 h-4 text-emerald-300" /> : <Save className="w-4 h-4" />}
@@ -411,9 +449,9 @@ export const QrCodeGenerator: React.FC = () => {
 
           <button
             type="button"
-            onClick={handleResetToOrigin}
+            onClick={handleRequestResetToOrigin}
             className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-2.5 rounded-xl transition cursor-pointer flex-shrink-0"
-            title="Reset to current browser origin"
+            title="Reset to current browser origin (Requires master password)"
           >
             Reset
           </button>
@@ -963,6 +1001,17 @@ export const QrCodeGenerator: React.FC = () => {
           )}
         </>
       )}
+
+      {/* Master Security Password Modal */}
+      <SecurityPasswordModal
+        isOpen={securityModalConfig.isOpen}
+        title={securityModalConfig.title}
+        description={securityModalConfig.description}
+        actionButtonText={securityModalConfig.actionText}
+        isDestructive={securityModalConfig.isDestructive}
+        onConfirm={securityModalConfig.onConfirm}
+        onClose={() => setSecurityModalConfig(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 };

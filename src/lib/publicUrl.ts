@@ -92,10 +92,12 @@ export function hasCustomPublicBaseUrl(): boolean {
   return Boolean(current && !isLocalOrPrivateHost(current));
 }
 
+import { authFetch } from './api';
+
 /**
  * Saves and synchronizes a new public QR base URL (e.g. https://xxxx.ngrok-free.app)
  */
-export async function setPublicBaseUrl(url: string): Promise<string> {
+export async function setPublicBaseUrl(url: string, securityPassword?: string): Promise<string> {
   const cleaned = cleanUrl(url);
   if (typeof window !== 'undefined') {
     if (cleaned) {
@@ -114,10 +116,14 @@ export async function setPublicBaseUrl(url: string): Promise<string> {
 
   // Also sync with server database settings
   try {
-    await fetch('/api/settings/public-url', {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (securityPassword) {
+      headers['X-Security-Password'] = securityPassword;
+    }
+    await authFetch('/api/settings/public-url', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ publicBaseUrl: cleaned }),
+      headers,
+      body: JSON.stringify({ publicBaseUrl: cleaned, securityPassword }),
     });
   } catch {
     // Ignore offline/static failure
@@ -129,7 +135,7 @@ export async function setPublicBaseUrl(url: string): Promise<string> {
 /**
  * Resets the public base URL back to default window.location.origin
  */
-export async function resetPublicBaseUrl(): Promise<string> {
+export async function resetPublicBaseUrl(securityPassword?: string): Promise<string> {
   if (typeof window !== 'undefined') {
     localStorage.removeItem(LOCAL_STORAGE_KEY);
   }
@@ -140,10 +146,14 @@ export async function resetPublicBaseUrl(): Promise<string> {
   }
 
   try {
-    await fetch('/api/settings/public-url', {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (securityPassword) {
+      headers['X-Security-Password'] = securityPassword;
+    }
+    await authFetch('/api/settings/public-url', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ publicBaseUrl: '' }),
+      headers,
+      body: JSON.stringify({ publicBaseUrl: '', securityPassword }),
     });
   } catch {}
   return typeof window !== 'undefined' ? window.location.origin : '';
