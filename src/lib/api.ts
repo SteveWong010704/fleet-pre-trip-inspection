@@ -206,10 +206,30 @@ export async function loginAdmin(username: string, passwordAttempt: string) {
   return data;
 }
 
-export async function checkDriverDailyInspection(driverId: string): Promise<{ hasInspectedToday: boolean; inspection?: InspectionRecord }> {
+export interface DriverDailyCheckResponse {
+  hasInspectedToday: boolean;
+  hasReachedLimit?: boolean;
+  inspectionCount?: number;
+  maxAllowed?: number;
+  isSupervisor?: boolean;
+  designation?: string;
+  inspection?: InspectionRecord;
+  inspections?: InspectionRecord[];
+}
+
+export async function checkDriverDailyInspection(driverId: string): Promise<DriverDailyCheckResponse> {
   const res = await authFetch(`/api/drivers/daily-check/${encodeURIComponent(driverId)}`);
   const data = await res.json();
-  return { hasInspectedToday: data.hasInspectedToday, inspection: data.inspection };
+  return {
+    hasInspectedToday: data.hasInspectedToday ?? false,
+    hasReachedLimit: data.hasReachedLimit ?? data.hasInspectedToday ?? false,
+    inspectionCount: data.inspectionCount ?? 0,
+    maxAllowed: data.maxAllowed ?? (data.isSupervisor ? 3 : 1),
+    isSupervisor: data.isSupervisor ?? false,
+    designation: data.designation,
+    inspection: data.inspection,
+    inspections: data.inspections,
+  };
 }
 
 export async function checkVehicleDailyInspection(vehicleNo: string): Promise<{ hasInspectedToday: boolean; inspection?: InspectionRecord }> {

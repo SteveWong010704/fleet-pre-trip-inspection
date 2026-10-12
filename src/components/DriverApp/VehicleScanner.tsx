@@ -1,5 +1,5 @@
   import React, { useState, useEffect, useRef } from 'react';
-  import { Vehicle, Driver, InspectionRecord } from '../../types';
+  import { Vehicle, Driver, InspectionRecord, isSupervisor } from '../../types';
   import { fetchVehicles, fetchVehicleByPlate, checkVehicleDailyInspection } from '../../lib/api';
   import { QrCode, Camera, Search, Truck, CheckCircle2, AlertTriangle, ArrowRight, RefreshCw, X, Shield, Fuel, ShieldAlert, ShieldCheck } from 'lucide-react';
   import jsQR from 'jsqr';
@@ -152,10 +152,13 @@
     };
 
     const handleSelectWithInspectionCheck = async (v: Vehicle) => {
+      const isSpv = isSupervisor(activeDriver?.designation);
       setCheckingPlate(v.vehicleNo);
       try {
         const vCheck = await checkVehicleDailyInspection(v.vehicleNo);
-        if (vCheck.hasInspectedToday && vCheck.inspection) {
+        // Regular drivers blocked if vehicle already inspected today.
+        // Supervisors permitted to audit/re-inspect (up to 3 times/day quota).
+        if (vCheck.hasInspectedToday && vCheck.inspection && !isSpv) {
           setBlockedInspection({ vehicle: v, inspection: vCheck.inspection });
           return;
         }
@@ -196,9 +199,18 @@
                 <h2 className="text-base sm:text-lg font-bold text-slate-900 leading-tight">
                   Scan QR Code or Select Vehicle Plate
                 </h2>
-                <p className="text-xs text-slate-500">
-                  Driver: <strong className="text-slate-800">{activeDriver.name}</strong> ({activeDriver.employeeId} • Depot {activeDriver.depot})
-                </p>
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 pt-0.5">
+                  <span>Driver: <strong className="text-slate-800">{activeDriver.name}</strong> ({activeDriver.employeeId} • Depot {activeDriver.depot})</span>
+                  {isSupervisor(activeDriver.designation) ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                      ⭐ Supervisor (Up to 3 Inspections/Day)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
+                      Standard Driver (1 Inspection/Day)
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 

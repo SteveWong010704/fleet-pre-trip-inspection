@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Driver, Vehicle, InspectionRecord } from '../../types';
+import { Driver, Vehicle, InspectionRecord, isSupervisor } from '../../types';
 import { loginDriver, checkDriverDailyInspection, checkVehicleDailyInspection } from '../../lib/api';
 import { UserCheck, ShieldAlert, KeyRound, User, ArrowRight, RefreshCw, AlertCircle, Truck, ShieldCheck, CheckCircle2 } from 'lucide-react';
 
@@ -55,12 +55,6 @@ export const DriverAuth: React.FC<DriverAuthProps> = ({ onAuthenticated, activeD
     setErrorMsg('');
     setAlreadyInspectedRecord(null);
 
-    // If bound truck has already been inspected today by ANY driver, prevent login and inspection
-    if (vehicleInspectedRecord) {
-      setErrorMsg(`Inspection Blocked: Truck ${boundVehicle?.vehicleNo} has already completed daily inspection today (${vehicleInspectedRecord.id}) by driver ${vehicleInspectedRecord.driverName}. Another driver cannot inspect this truck again today.`);
-      return;
-    }
-
     if (!loginId.trim() || !password.trim()) {
       setErrorMsg('Please enter both your Driver ID and Password.');
       return;
@@ -68,27 +62,41 @@ export const DriverAuth: React.FC<DriverAuthProps> = ({ onAuthenticated, activeD
 
     setIsAuthenticating(true);
     try {
-      // Re-verify truck daily inspection in real-time if boundVehicle exists
-      if (boundVehicle?.vehicleNo) {
-        const vCheck = await checkVehicleDailyInspection(boundVehicle.vehicleNo);
-        if (vCheck.hasInspectedToday && vCheck.inspection) {
-          setVehicleInspectedRecord(vCheck.inspection);
-          setErrorMsg(`Inspection Blocked: Truck ${boundVehicle.vehicleNo} has already completed daily inspection today (${vCheck.inspection.id}) by driver ${vCheck.inspection.driverName}. Each truck can only be inspected once per day.`);
-          setIsAuthenticating(false);
-          return;
-        }
-      }
-
       const res = await loginDriver(loginId.trim(), password.trim());
       if (res.success && res.driver) {
-        // Check if driver has already completed daily inspection
+        const isSpv = isSupervisor(res.driver.designation);
+
+        // If bound truck has already been inspected today:
+        // Regular drivers blocked; Supervisors permitted to inspect/audit up to 3 times/day
+        if (boundVehicle?.vehicleNo && !isSpv) {
+          const vCheck = await checkVehicleDailyInspection(boundVehicle.vehicleNo);
+          if (vCheck.hasInspectedToday && vCheck.inspection) {
+            setVehicleInspectedRecord(vCheck.inspection);
+            setErrorMsg(`Inspection Blocked: Truck ${boundVehicle.vehicleNo} has already completed daily inspection today (${vCheck.inspection.id}) by driver ${vCheck.inspection.driverName}. Regular drivers cannot inspect this truck again today.`);
+            setIsAuthenticating(false);
+            return;
+          }
+        }
+
+        // Check driver daily inspection quota (Supervisor up to 3, others 1)
         const dailyCheck = await checkDriverDailyInspection(res.driver.loginId);
-        if (dailyCheck.hasInspectedToday && dailyCheck.inspection) {
+        const maxAllowed = isSpv ? 3 : 1;
+        const currentCount = dailyCheck.inspectionCount || 0;
+        const hasReachedLimit = dailyCheck.hasReachedLimit !== undefined
+          ? dailyCheck.hasReachedLimit
+          : (isSpv ? currentCount >= 3 : dailyCheck.hasInspectedToday);
+
+        if (hasReachedLimit && dailyCheck.inspection) {
           setAlreadyInspectedRecord(dailyCheck.inspection);
-          setErrorMsg(`Daily Inspection Limit Reached: Driver ${res.driver.name} has already completed an inspection today (${dailyCheck.inspection.id}) for vehicle ${dailyCheck.inspection.vehicleNo}. Each driver is restricted to 1 inspection per day.`);
+          if (isSpv) {
+            setErrorMsg(`Supervisor Daily Limit Reached: Supervisor ${res.driver.name} has completed all 3 daily inspections for today (${currentCount}/3).`);
+          } else {
+            setErrorMsg(`Daily Inspection Limit Reached: Driver ${res.driver.name} has already completed an inspection today (${dailyCheck.inspection.id}) for vehicle ${dailyCheck.inspection.vehicleNo}. Regular drivers are restricted to 1 inspection per day.`);
+          }
           setIsAuthenticating(false);
           return;
         }
+
         onAuthenticated(res.driver);
       } else {
         setErrorMsg(res.message || 'Authentication failed. Please verify your Driver ID and Password.');
