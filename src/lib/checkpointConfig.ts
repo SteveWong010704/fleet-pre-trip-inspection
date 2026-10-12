@@ -53,7 +53,7 @@ export const CHECKPOINT_PHOTO_CONFIG: Record<string, CheckpointRequirement> = {
     id: 'dashboard_warnings',
     minPhotos: 1,
     slots: [
-      { index: 0, name: 'Instrument Cluster', shortLabel: 'Cluster', description: 'Dashboard Guages & Warning Lamps' },
+      { index: 0, name: 'Meter & Odometer (Start Engine First)', shortLabel: 'Meter (Engine Started)', description: 'Dashboard Cluster & Odometer (Engine Started, Flashlight ON)' },
     ],
   },
   brake_system: {

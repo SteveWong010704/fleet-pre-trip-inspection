@@ -219,8 +219,8 @@ export const WEEKDAY_6_POINT_ITEMS: Omit<InspectionCheckItem, 'status' | 'defect
     id: 'dashboard_warnings',
     code: 5,
     category: 'Instruments & Electronics',
-    title: 'Meter & Dashboard (Start Engine, Take Photo)',
-    subtext: 'FINAL STEP: Turn key ON, start engine, photograph instrument cluster, odometer, and warning lights.',
+    title: 'Meter & Dashboard (START VEHICLE ENGINE FIRST)',
+    subtext: 'MANDATORY: Turn key ON and start engine before taking photo. Ensure odometer digits and gauges are fully lit. Turn ON camera flash (⚡).',
     dashboardChecks: {
       engineLightOff: true,
       doubleSignalOk: true,
@@ -300,8 +300,8 @@ export const SATURDAY_FULL_ITEMS: Omit<InspectionCheckItem, 'status' | 'defectNo
     id: 'dashboard_warnings',
     code: 10,
     category: 'Instruments & Electronics',
-    title: 'Meter & Dashboard (Start Engine, Take Photo)',
-    subtext: 'FINAL STEP: Turn key ON, start engine, photograph instrument cluster, odometer, and warning lights.',
+    title: 'Meter & Dashboard (START VEHICLE ENGINE FIRST)',
+    subtext: 'MANDATORY: Turn key ON and start engine before taking photo. Ensure odometer digits and gauges are fully lit. Turn ON camera flash (⚡).',
     dashboardChecks: {
       engineLightOff: true,
       doubleSignalOk: true,

@@ -369,8 +369,28 @@ async function startServer() {
     })
   );
 
+  // Static sample-photos directory for official inspection guidelines
+  const samplePhotosDir = path.join(process.cwd(), 'public', 'sample-photos');
+  if (!fs.existsSync(samplePhotosDir)) {
+    try {
+      fs.mkdirSync(samplePhotosDir, { recursive: true });
+    } catch {}
+  }
+  app.use(
+    '/sample-photos',
+    express.static(samplePhotosDir, {
+      maxAge: '7d',
+      etag: true,
+      lastModified: true,
+    })
+  );
   // Static uploads directory with caching headers to eliminate redundant image re-downloads
   const uploadsDir = path.join(process.cwd(), 'uploads');
+  if (!fs.existsSync(uploadsDir)) {
+    try {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    } catch {}
+  }
   app.use(
     '/uploads',
     express.static(uploadsDir, {
