@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, VehicleStatus } from '../src/types';
+import { INITIAL_VEHICLES, INITIAL_DRIVERS } from './seedData';
 import { scheduleDebouncedBackup } from './backupService';
 import { logger } from './logger';
 import {
@@ -135,9 +136,18 @@ export function initStore() {
         saveStore(true);
       }
 
-      console.log(`[Storage] Loaded ${memoryStore.vehicles.length} vehicles, ${memoryStore.drivers.length} drivers, ${memoryStore.inspections.length} inspections.`);
       if (memoryStore.settings.publicBaseUrl) {
         console.log(`[Storage] Configured Public QR Base URL: ${memoryStore.settings.publicBaseUrl}`);
+      }
+
+      if (memoryStore.vehicles.length === 0 && memoryStore.drivers.length === 0) {
+        memoryStore.vehicles = [...INITIAL_VEHICLES];
+        memoryStore.drivers = [...INITIAL_DRIVERS];
+        memoryStore.vehicles.forEach((v) => {
+          if (!v.qrToken) v.qrToken = generateVehicleQrToken();
+        });
+        saveStore(true);
+        console.log(`[Storage] Re-seeded with ${memoryStore.vehicles.length} vehicles and ${memoryStore.drivers.length} drivers.`);
       }
 
       // Ensure all vehicles (including legacy/existing) have a unified static QR security token
@@ -156,13 +166,20 @@ export function initStore() {
       // Automatically prune any inspection records older than 45 days on startup
       pruneOldInspections(45);
     } else {
-      // 100% clean start - no preset data
-      memoryStore.vehicles = [];
-      memoryStore.drivers = [];
+      // Clean start - initialize with preset fleet and drivers
+      memoryStore.vehicles = [...INITIAL_VEHICLES];
+      memoryStore.drivers = [...INITIAL_DRIVERS];
       memoryStore.inspections = [];
       memoryStore.auditLogs = [];
       memoryStore.settings = { publicBaseUrl: envPublicUrl };
+      // Ensure all initial vehicles have static QR tokens
+      memoryStore.vehicles.forEach((v) => {
+        if (!v.qrToken || typeof v.qrToken !== 'string' || !v.qrToken.trim()) {
+          v.qrToken = generateVehicleQrToken();
+        }
+      });
       saveStore(true);
+      console.log(`[Storage] Initialized clean store with ${memoryStore.vehicles.length} preset vehicles and ${memoryStore.drivers.length} drivers.`);
     }
 
     // Connect to Microsoft SQL Server (SSMS) and synchronize data
@@ -967,16 +984,63 @@ export function isSameDay(isoTimestamp: string, targetDate: Date | string = new 
   }
 }
 
-// Check Driver Daily Inspection (returns latest today inspection record if exists)
-export function getDriverDailyInspection(driverId: string): InspectionRecord | null {
-  if (!driverId) return null;
-  const cleanId = driverId.trim().toUpperCase();
+// Helper to determine if a driver is a Supervisor (SPV / SUPERVISOR)
+export function isSupervisor(designation?: string | null): boolean {
+  if (!designation) return false;
+  const d = String(designation).trim().toUpperCase();
+  return d === 'SPV' || d.includes('SUPERVISOR') || d.includes('SPV');
+}
+
+// Get all inspections completed by driver today
+export function getDriverDailyInspections(driverIdentifier: string): InspectionRecord[] {
+  if (!driverIdentifier) return [];
+  const clean = driverIdentifier.trim().toUpperCase();
+  const driver = getDriverByLogin(driverIdentifier);
+  const employeeId = (driver?.employeeId || '').trim().toUpperCase();
+  const loginId = (driver?.loginId || '').trim().toUpperCase();
   const now = new Date();
-  const existing = memoryStore.inspections.find(i => {
-    const isSameDriver = (i.driverId || '').trim().toUpperCase() === cleanId;
+
+  return memoryStore.inspections.filter(i => {
+    const inspDriverId = (i.driverId || '').trim().toUpperCase();
+    const isSameDriver =
+      inspDriverId === clean ||
+      (employeeId && inspDriverId === employeeId) ||
+      (loginId && inspDriverId === loginId);
     return isSameDriver && isSameDay(i.timestamp, now);
   });
-  return existing || null;
+}
+
+// Check Driver Daily Inspection (returns latest today inspection record if exists)
+export function getDriverDailyInspection(driverId: string): InspectionRecord | null {
+  const list = getDriverDailyInspections(driverId);
+  return list[0] || null;
+}
+
+// Check Driver Inspection Status with Role-Based Limits (Supervisor up to 3, others 1)
+export function getDriverInspectionStatus(driverId: string, customDesignation?: string): {
+  isSupervisor: boolean;
+  maxAllowed: number;
+  currentCount: number;
+  hasReachedLimit: boolean;
+  latestInspection: InspectionRecord | null;
+  inspections: InspectionRecord[];
+} {
+  const driver = getDriverByLogin(driverId);
+  const designation = customDesignation || driver?.designation || '';
+  const isSpv = isSupervisor(designation);
+  const maxAllowed = isSpv ? 3 : 1;
+  const todayInspections = getDriverDailyInspections(driverId);
+  const currentCount = todayInspections.length;
+  const hasReachedLimit = currentCount >= maxAllowed;
+
+  return {
+    isSupervisor: isSpv,
+    maxAllowed,
+    currentCount,
+    hasReachedLimit,
+    latestInspection: todayInspections[0] || null,
+    inspections: todayInspections,
+  };
 }
 
 // Check Vehicle Daily Inspection (returns latest today inspection record if exists)
@@ -995,16 +1059,30 @@ export function getVehicleDailyInspection(vehicleNo: string): InspectionRecord |
 export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'timestamp' | 'formattedDate'>): InspectionRecord {
   const todayStr = getCalendarDateString(new Date());
 
-  // 1. Enforce 1 inspection per vehicle per calendar day (strictly date-based, not 24h timer)
-  const existingVehicleToday = getVehicleDailyInspection(inspectionData.vehicleNo);
-  if (existingVehicleToday) {
-    throw new Error(`Vehicle Already Inspected Today: Truck ${inspectionData.vehicleNo} has already completed daily inspection for date ${todayStr} (Cert #${existingVehicleToday.id}) by driver ${existingVehicleToday.driverName || existingVehicleToday.driverId}. Each truck is limited to 1 inspection per calendar day.`);
+  const driver = getDriverByLogin(inspectionData.driverId);
+  const designation = inspectionData.driverDesignation || driver?.designation || '';
+  const isSpv = isSupervisor(designation);
+  const maxAllowed = isSpv ? 3 : 1;
+  const todayDriverInspections = getDriverDailyInspections(inspectionData.driverId);
+
+  // 1. Enforce driver daily inspection limit:
+  // Supervisor: up to 3 inspections per calendar day
+  // Regular drivers: strictly 1 inspection per calendar day
+  if (todayDriverInspections.length >= maxAllowed) {
+    if (isSpv) {
+      throw new Error(`Supervisor Daily Limit Reached: Supervisor ${inspectionData.driverName || inspectionData.driverId} has reached the maximum daily limit of 3 vehicle inspections for date ${todayStr}.`);
+    } else {
+      const first = todayDriverInspections[0];
+      throw new Error(`Daily Inspection Limit Reached: Driver ${inspectionData.driverName || inspectionData.driverId} has already completed daily inspection for date ${todayStr} (Cert #${first?.id || 'DONE'}) for vehicle ${first?.vehicleNo || inspectionData.vehicleNo}. Each driver is restricted to 1 vehicle inspection per calendar day.`);
+    }
   }
 
-  // 2. Enforce 1 inspection per driver per calendar day (strictly date-based, not 24h timer)
-  const existingDriverToday = getDriverDailyInspection(inspectionData.driverId);
-  if (existingDriverToday) {
-    throw new Error(`Daily Inspection Limit Reached: Driver ${inspectionData.driverName || inspectionData.driverId} has already completed daily inspection for date ${todayStr} (Cert #${existingDriverToday.id}) for vehicle ${existingDriverToday.vehicleNo}. Each driver is restricted to 1 vehicle inspection per calendar day.`);
+  // 2. Enforce vehicle check:
+  // Regular drivers cannot inspect a truck already inspected today.
+  // Supervisors CAN inspect/re-inspect/audit vehicles (up to their 3 daily inspections quota).
+  const existingVehicleToday = getVehicleDailyInspection(inspectionData.vehicleNo);
+  if (existingVehicleToday && !isSpv) {
+    throw new Error(`Vehicle Already Inspected Today: Truck ${inspectionData.vehicleNo} has already completed daily inspection for date ${todayStr} (Cert #${existingVehicleToday.id}) by driver ${existingVehicleToday.driverName || existingVehicleToday.driverId}. Each truck is limited to 1 inspection per calendar day.`);
   }
 
   const timestamp = new Date().toISOString();

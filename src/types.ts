@@ -54,6 +54,24 @@ export interface Driver {
   lockedUntil?: string | null;
 }
 
+/**
+ * Checks if a driver holds a supervisor designation (SPV / SUPERVISOR)
+ */
+export function isSupervisor(designation?: string | null): boolean {
+  if (!designation) return false;
+  const d = String(designation).trim().toUpperCase();
+  return d === 'SPV' || d.includes('SUPERVISOR') || d.includes('SPV');
+}
+
+/**
+ * Returns the maximum allowed daily inspections:
+ * - Supervisor: up to 3 inspections per day
+ * - Regular drivers / salesmen: 1 inspection per day
+ */
+export function getDailyInspectionLimit(designation?: string | null): number {
+  return isSupervisor(designation) ? 3 : 1;
+}
+
 export interface AdminUser {
   username: string; // admin1, admin2, admin3
   name: string;
@@ -185,7 +203,6 @@ export interface FleetStats {
 // ============================================================================
 
 // 1. WEEKDAY ROUTINE (MONDAY - FRIDAY): EXACTLY 5 CHECKPOINTS, 6 PHOTOS
-// Order: Front Tyres (L&R: 2 photos) -> Engine Oil (1) -> Radiator (1) -> Diesel Cap (1) -> Meter Dashboard (1, LAST after engine start)
 export const WEEKDAY_6_POINT_ITEMS: Omit<InspectionCheckItem, 'status' | 'defectNote' | 'photoUrl'>[] = [
   {
     id: 'tires_wheels',
@@ -231,7 +248,6 @@ export const WEEKDAY_6_POINT_ITEMS: Omit<InspectionCheckItem, 'status' | 'defect
 ];
 
 // 2. SATURDAY AUDIT (WEEKLY DEEP AUDIT: FULL SET WITH DASHBOARD LAST)
-// Items 1-9 cover exterior, rolling gear, body, fluids, emergency. Item 10 is Meter Dashboard (LAST).
 export const SATURDAY_FULL_ITEMS: Omit<InspectionCheckItem, 'status' | 'defectNote' | 'photoUrl'>[] = [
   {
     id: 'tires_wheels',
@@ -326,7 +342,6 @@ export function getActiveInspectionItems(isSaturday: boolean = isSaturdayInspect
   return isSaturday ? SATURDAY_FULL_ITEMS : WEEKDAY_6_POINT_ITEMS;
 }
 
-// Backward-compatible alias
 export const STANDARD_10_POINT_ITEMS = SATURDAY_FULL_ITEMS;
 
 export interface SafetyEquipmentSpec {
@@ -342,49 +357,49 @@ export const APAD_SAFETY_EQUIPMENT_SPEC: SafetyEquipmentSpec[] = [
     id: 'fire_extinguisher',
     name: 'Fire Extinguisher',
     unit: '1 unit (9kg for Feeder)',
-    feederOnly: false, // Required for both Small Truck & Feeder
+    feederOnly: false,
     description: 'Dry chemical powder extinguisher with valid inspection tag & pressure needle in green zone.',
   },
   {
     id: 'warning_triangle',
     name: 'Emergency Warning Triangle',
     unit: '1 unit',
-    feederOnly: false, // Required for both Small Truck & Feeder
+    feederOnly: false,
     description: 'Foldable retro-reflective red safety triangle in good working condition.',
   },
   {
     id: 'first_aid_kit',
     name: 'First Aid Kit (Peti Kecemasan)',
     unit: '1 unit',
-    feederOnly: true, // Mandatory for Feeder per APAD
+    feederOnly: true,
     description: 'Standard emergency medical first aid box with valid dressings and antiseptic supplies.',
   },
   {
     id: 'safety_vest',
     name: 'High-Visibility Safety Vest (Jaket Keselamatan)',
     unit: '1 unit',
-    feederOnly: true, // Mandatory for Feeder per APAD
+    feederOnly: true,
     description: 'Fluorescent high-visibility reflective vest for emergency roadside visibility.',
   },
   {
     id: 'flashlight',
     name: 'Heavy-Duty Flashlight (Lampu Suluh)',
     unit: '1 unit',
-    feederOnly: true, // Mandatory for Feeder per APAD
+    feederOnly: true,
     description: 'Handheld inspection torchlight with tested charged batteries.',
   },
   {
     id: 'reflective_string',
     name: '50m Reflective Line (Rentetan Reflektif 50m)',
     unit: '1 unit',
-    feederOnly: true, // Mandatory for Feeder per APAD
+    feederOnly: true,
     description: '50-meter perimeter reflective safety cord / warning ribbon for hazard cordoning.',
   },
   {
     id: 'safety_cones',
     name: 'Safety Warning Cones (Kon Keselamatan)',
     unit: '5 units',
-    feederOnly: true, // Mandatory for Feeder per APAD (5 units)
+    feederOnly: true,
     description: 'Standard 5-unit set of reflective orange traffic safety cones for perimeter marking.',
   },
 ];
@@ -409,4 +424,3 @@ export const APAD_QUICK_SYSTEMS: QuickSystemCheckItem[] = [
   { id: 'mech_steering', group: 'Drive & Mechanical', label: 'Power Steering Handling', detail: 'Steering wheel turns freely without excessive play, stiffness, or vibration' },
   { id: 'mech_leaks_noise', group: 'Drive & Mechanical', label: 'No Fluid Leaks & Abnormal Noise', detail: 'No knocking sounds or oil/fluid drips underneath engine and chassis' },
 ];
-

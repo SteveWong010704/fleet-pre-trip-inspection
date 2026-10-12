@@ -24,6 +24,9 @@ import {
   unlockDriver,
   verifyAdminLogin,
   getDriverDailyInspection,
+  getDriverDailyInspections,
+  getDriverInspectionStatus,
+  isSupervisor,
   getVehicleDailyInspection,
   getInspections,
   addInspection,
@@ -273,6 +276,31 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
     return res.status(403).json({ success: false, message: 'Access denied: Administrator privileges required' });
   }
   (req as any).user = payload;
+  next();
+}
+
+// Master Security Password Verification (Protects database wipe, delete all, QR reset/edit)
+const MASTER_SECURITY_PASSWORD = 'MightY99/.1234';
+
+function verifySecurityPassword(req: express.Request): boolean {
+  const entered = (
+    req.body?.securityPassword ||
+    req.headers['x-security-password'] ||
+    req.query?.securityPassword ||
+    ''
+  ).toString().trim();
+  return entered === MASTER_SECURITY_PASSWORD;
+}
+
+function requireSecurityPassword(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!verifySecurityPassword(req)) {
+    logger.warn('SECURITY', `Security authorization failed on sensitive endpoint: ${req.method} ${req.originalUrl || req.url}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Security authorization failed: Incorrect master password.',
+      message: 'Security authorization failed: Incorrect master password.',
+    });
+  }
   next();
 }
 
@@ -664,11 +692,20 @@ async function startServer() {
     }
   });
 
-  // Check driver daily inspection status
+  // Check driver daily inspection status (Supervisor up to 3, others 1)
   app.get('/api/drivers/daily-check/:driverId', (req, res) => {
     try {
-      const existing = getDriverDailyInspection(req.params.driverId);
-      res.json({ success: true, hasInspectedToday: !!existing, inspection: existing });
+      const status = getDriverInspectionStatus(req.params.driverId);
+      res.json({
+        success: true,
+        hasInspectedToday: status.hasReachedLimit,
+        hasReachedLimit: status.hasReachedLimit,
+        inspectionCount: status.currentCount,
+        maxAllowed: status.maxAllowed,
+        isSupervisor: status.isSupervisor,
+        inspection: status.latestInspection,
+        inspections: status.inspections,
+      });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -814,8 +851,8 @@ async function startServer() {
     }
   });
 
-  // Regenerate static QR token for vehicle (Admin only)
-  app.post('/api/vehicles/:plate/regenerate-qr-token', requireAdmin, (req, res) => {
+  // Regenerate static QR token for vehicle (Admin & Master Password protected)
+  app.post('/api/vehicles/:plate/regenerate-qr-token', requireAdmin, requireSecurityPassword, (req, res) => {
     try {
       const updated = regenerateVehicleQrToken(req.params.plate);
       if (!updated) {
@@ -1036,10 +1073,15 @@ async function startServer() {
         }
       }
 
-      // Anti-Replay & Duplicate Inspection Defense:
+      // Anti-Replay & Duplicate Inspection Defense (Supervisor up to 3, others 1):
+      const driverObj = getDriverByLogin(authUser.sub) || getDriverByLogin(inspectionData.driverId);
+      const isSpv = isSupervisor(inspectionData.driverDesignation || driverObj?.designation);
+      const maxAllowed = isSpv ? 3 : 1;
+
       // 1. Has vehicle already completed inspection today?
+      // (Regular drivers blocked; Supervisors permitted to audit/re-inspect up to their 3 limit)
       const existingVehicle = getVehicleDailyInspection(inspectionData.vehicleNo);
-      if (existingVehicle) {
+      if (existingVehicle && !isSpv) {
         return res.status(409).json({
           success: false,
           message: `Vehicle Already Inspected Today: Truck ${inspectionData.vehicleNo} has already completed daily inspection today (${existingVehicle.id}) by ${existingVehicle.driverName}. Each truck can only be inspected once per day.`,
@@ -1047,15 +1089,24 @@ async function startServer() {
         });
       }
 
-      // 2. Has driver already completed an inspection today? (if driver role)
+      // 2. Has driver already completed allowed inspections today? (Supervisor up to 3, others 1)
       if (authUser.role === 'driver') {
-        const existingDriver = getDriverDailyInspection(authUser.sub);
-        if (existingDriver) {
-          return res.status(409).json({
-            success: false,
-            message: `Driver Daily Limit Reached: Driver ${authUser.name} has already completed an inspection today (${existingDriver.id}) for vehicle ${existingDriver.vehicleNo}.`,
-            existingInspection: existingDriver,
-          });
+        const todayDriverInspections = getDriverDailyInspections(authUser.sub);
+        if (todayDriverInspections.length >= maxAllowed) {
+          if (isSpv) {
+            return res.status(409).json({
+              success: false,
+              message: `Supervisor Daily Limit Reached: Supervisor ${authUser.name} has already completed the maximum limit of 3 daily inspections today.`,
+              existingInspection: todayDriverInspections[0],
+            });
+          } else {
+            const first = todayDriverInspections[0];
+            return res.status(409).json({
+              success: false,
+              message: `Driver Daily Limit Reached: Driver ${authUser.name} has already completed an inspection today (${first?.id || 'DONE'}) for vehicle ${first?.vehicleNo || inspectionData.vehicleNo}. Each driver is restricted to 1 vehicle inspection per calendar day.`,
+              existingInspection: first,
+            });
+          }
         }
       }
 
@@ -1117,8 +1168,8 @@ async function startServer() {
     }
   });
 
-  // Clear all inspections (Admin only)
-  app.delete('/api/inspections', requireAdmin, (req, res) => {
+  // Clear all inspections (Admin & Master Password protected)
+  app.delete('/api/inspections', requireAdmin, requireSecurityPassword, (req, res) => {
     try {
       clearAllInspections();
       res.json({ success: true, message: 'All inspections cleared. Vehicles reset to Pending Inspection.' });
@@ -1127,8 +1178,8 @@ async function startServer() {
     }
   });
 
-  // Wipe entire fleet database (Admin only)
-  app.post('/api/storage/clear-all', requireAdmin, (req, res) => {
+  // Wipe entire fleet database (Admin & Master Password protected)
+  app.post('/api/storage/clear-all', requireAdmin, requireSecurityPassword, (req, res) => {
     try {
       const result = clearAllFleetData();
       res.json(result);
@@ -1137,8 +1188,8 @@ async function startServer() {
     }
   });
 
-  // Clear all vehicles (Admin only)
-  app.post('/api/vehicles/clear-all', requireAdmin, (req, res) => {
+  // Clear all vehicles (Admin & Master Password protected)
+  app.post('/api/vehicles/clear-all', requireAdmin, requireSecurityPassword, (req, res) => {
     try {
       const result = clearAllVehicles();
       res.json(result);
@@ -1147,8 +1198,8 @@ async function startServer() {
     }
   });
 
-  // Clear all drivers (Admin only)
-  app.post('/api/drivers/clear-all', requireAdmin, (req, res) => {
+  // Clear all drivers (Admin & Master Password protected)
+  app.post('/api/drivers/clear-all', requireAdmin, requireSecurityPassword, (req, res) => {
     try {
       const result = clearAllDrivers();
       res.json(result);
@@ -1259,7 +1310,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/settings/public-url', requireAdmin, (req, res) => {
+  app.post('/api/settings/public-url', requireAdmin, requireSecurityPassword, (req, res) => {
     try {
       const { publicBaseUrl } = req.body;
       const updated = updateSettings({ publicBaseUrl });
@@ -1282,7 +1333,7 @@ async function startServer() {
   app.post('/api/backup/run', requireAdmin, backupHeavyLimiter, (req, res) => {
     try {
       const result = performDailyBackup('manual_admin_trigger');
-      res.json({ success: true, ...result });
+      res.json(result);
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
