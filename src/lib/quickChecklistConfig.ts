@@ -13,9 +13,10 @@ export const LIGHTS_CHECKS: QuickCheckQuestion[] = [
 ];
 
 export const BRAKES_CHECKS: QuickCheckQuestion[] = [
-  { key: 'foot_brake', label: 'Service Foot Brake', subtext: 'Firm pedal resistance, prompt stopping power' },
-  { key: 'handbrake', label: 'Parking Handbrake', subtext: 'Holds vehicle securely on incline/gradient' },
-  { key: 'air_pressure', label: 'Air / Vacuum Pressure System', subtext: 'Pressure builds and maintains normal operating range' },
+  { key: 'brake_fluid', label: 'Brake Fluid Reservoir & Level', subtext: 'Adequate level between MIN and MAX notches, reservoir clean, cap sealed' },
+  { key: 'foot_brake', label: 'Service Foot Brake', subtext: 'Firm pedal resistance, prompt stopping power, no sponginess' },
+  { key: 'handbrake', label: 'Parking Handbrake', subtext: 'Holds vehicle securely on incline/gradient, normal lever travel' },
+  { key: 'air_pressure', label: 'Air / Vacuum Pressure System', subtext: 'Pressure builds promptly and maintains normal operating range' },
 ];
 
 export const STEERING_CHECKS: QuickCheckQuestion[] = [
@@ -25,10 +26,10 @@ export const STEERING_CHECKS: QuickCheckQuestion[] = [
 ];
 
 export const FLUIDS_CHECKS: QuickCheckQuestion[] = [
-  { key: 'engine_oil', label: 'Engine Oil Dipstick Level', subtext: 'Safe level between Min and Max markers' },
-  { key: 'brake_fluid', label: 'Brake & Clutch Fluid Reservoirs', subtext: 'Adequate level, cap securely sealed' },
+  { key: 'engine_oil', label: 'Engine Oil Dipstick Level', subtext: 'Safe level between Min and Max markers, oil condition clear' },
+  { key: 'clutch_transmission', label: 'Clutch & Transmission System', subtext: 'Adequate fluid level, smooth clutch & gear engagement' },
   { key: 'battery', label: 'Battery Terminals & Hold-Down', subtext: 'Clean terminals, tight connections, corrosion-free' },
-  { key: 'no_leaks', label: 'No Fluid Puddles or Leaks', subtext: 'No oil, fuel, or fluid dripping under engine/gearbox' },
+  { key: 'no_leaks', label: 'No Oil / Powertrain Fluid Leaks', subtext: 'No engine oil or gearbox fluid dripping under vehicle' },
 ];
 
 export const FEEDER_APAD_SAFETY_EQUIPMENT: QuickCheckQuestion[] = [

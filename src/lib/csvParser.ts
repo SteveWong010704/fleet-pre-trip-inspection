@@ -279,7 +279,7 @@ export function parseInspectionCsv(csvText: string): Partial<InspectionRecord>[]
 
   const default10Def = [
     { id: 'tires_wheels', code: 1, category: 'Chassis & Rolling Gear', title: 'Tires & Wheels (5 Photos)', subtext: 'Tires & Spare Tyre Pressure' },
-    { id: 'brake_system', code: 2, category: 'Control & Stopping', title: 'Brake System', subtext: 'Brake System & Air Pressure' },
+    { id: 'brake_system', code: 2, category: 'Control & Stopping', title: 'Brake System', subtext: 'Brake System, Brake Fluid & Air Pressure' },
     { id: 'lights_indicators', code: 3, category: 'Visibility & Signals', title: 'Lights & Indicators', subtext: 'Lights, Turn Signals & Hazard' },
     { id: 'steering_handling', code: 4, category: 'Control & Stopping', title: 'Steering & Handling', subtext: 'Steering & Suspension' },
     { id: 'radiator_coolant', code: 5, category: 'Engine & Cooling', title: 'Radiator & Coolant Level', subtext: 'Radiator Tank, Cap & Coolant' },
@@ -287,7 +287,7 @@ export function parseInspectionCsv(csvText: string): Partial<InspectionRecord>[]
     { id: 'emergency_equipment', code: 7, category: 'Safety & Emergency', title: 'Emergency Equipment', subtext: 'Safety Equipment & Fire Extinguisher' },
     { id: 'body_passenger_doors', code: 8, category: 'Body & Access', title: 'Cargo & Body (4 Sides)', subtext: 'Cargo Box & Body Integrity' },
     { id: 'diesel_fuel_cap', code: 9, category: 'Fuel & Security', title: 'Diesel Fuel Tank & Cap', subtext: 'Diesel Filler Cap & Tank' },
-    { id: 'fluids_powertrain', code: 10, category: 'Engine & Fluids', title: 'Fluids & Powertrain', subtext: 'Engine Oil, Brake Fluid & Battery' },
+    { id: 'fluids_powertrain', code: 10, category: 'Engine & Fluids', title: 'Fluids & Powertrain', subtext: 'Engine Oil, Transmission & Battery' },
   ];
 
   for (let i = 1; i < lines.length; i++) {

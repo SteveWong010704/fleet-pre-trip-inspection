@@ -46,16 +46,90 @@ interface ActiveTarget {
 }
 
 const COMMON_DEFECT_TAGS: Record<string, string[]> = {
-  tires_wheels: ['Low Air Pressure / Flat', 'Tread Depth < 1.6mm', 'Sidewall Bulge / Cut', 'Wheel Lug Nut Loose', 'Spare Tyre Missing/Flat'],
-  brake_system: ['Soft / Spongy Pedal', 'Air Pressure Slow to Build', 'Parking Brake Ineffective', 'Brake Noise / Grinding'],
-  lights_indicators: ['Headlight Bulb Failed', 'Brake Light Inoperative', 'Turn Signal Not Blinking', 'Hazard Flashers Faulty', 'Reverse Lamp Inactive'],
-  steering_handling: ['Excessive Steering Play', 'Front Vibration / Wobble', 'Power Steering Fluid Low', 'Stiff Steering Response'],
-  radiator_coolant: ['Coolant Leak Below Radiator', 'Expansion Tank Below Min', 'Radiator Cap Missing/Damaged', 'Hose Swollen / Cracked'],
-  dashboard_warnings: ['Check Engine Warning Lamp ON', 'Hazard / Double Signal Faulty', 'Alternator / Battery Lamp ON', 'Engine Oil Pressure Lamp ON'],
-  emergency_equipment: ['Fire Extinguisher Expired', 'Extinguisher Gauge in RED', 'Reflective Triangle Missing', 'First Aid Kit Incomplete'],
-  body_passenger_doors: ['Cargo Door Latch Broken', 'Body Panel Dented', 'Side Curtain / Panel Torn', 'Roller Shutter Sticking'],
-  diesel_fuel_cap: ['Diesel Cap Missing', 'Tank Filler Cap Damaged', 'Diesel Leak Around Neck', 'Fuel Odor / Spill Detected'],
-  fluids_powertrain: ['Engine Oil Dipstick Low', 'Brake Fluid Below Min', 'Battery Terminals Corroded', 'Transmission Fluid Leak'],
+  tires_wheels: [
+    'Low Air Pressure / Flat Tyre',
+    'Tread Depth < 1.6mm / Bald Tyre',
+    'Sidewall Bulge / Deep Cut',
+    'Wheel Lug Nut Loose / Missing',
+    'Tyre Valve Cap Missing / Leaking',
+    'Spare Tyre Missing / Flat',
+    'Uneven Tyre Wear / Canvas Exposed',
+  ],
+  brake_system: [
+    'Brake Fluid Below Min / Reservoir Leak',
+    'Soft / Spongy Brake Pedal',
+    'Air Pressure Slow to Build (< 6 bar)',
+    'Air Pressure Leak / Hissing Noise',
+    'Parking Handbrake Ineffective / Loose',
+    'Brake Noise / Heavy Grinding',
+    'Brake Pulling to One Side',
+    'Brake Warning Lamp ON',
+  ],
+  lights_indicators: [
+    'Headlight Low/High Beam Failed',
+    'Brake Light Inoperative / Blown',
+    'Turn Signal / Blinker Not Working',
+    'Hazard / Double Signal Faulty',
+    'Reverse Lamp Inactive',
+    'Rear Number Plate Light Faulty',
+    'Clearance / Marker Light Faulty',
+  ],
+  steering_handling: [
+    'Excessive Steering Play (> 30mm)',
+    'Front Vibration / Steering Wobble',
+    'Power Steering Fluid Below Min',
+    'Stiff / Heavy Steering Response',
+    'Power Steering Pump Whine / Noise',
+    'Steering Pulling Strongly to One Side',
+  ],
+  radiator_coolant: [
+    'Coolant Leak Below Radiator',
+    'Expansion Tank Coolant Below Min',
+    'Radiator Pressure Cap Missing / Damaged',
+    'Radiator Hose Swollen / Cracked',
+    'Engine Temperature High / Overheating',
+  ],
+  dashboard_warnings: [
+    'Check Engine MIL Warning Lamp ON',
+    'Brake / ABS Warning Lamp ON',
+    'Alternator / Battery Charging Lamp ON',
+    'Engine Low Oil Pressure Lamp ON',
+    'Speedometer / Odometer Inoperative',
+    'Horn Inoperative / Weak',
+  ],
+  emergency_equipment: [
+    'Fire Extinguisher Gauge in RED',
+    'Fire Extinguisher Missing / Discharged',
+    'Fire Extinguisher Inspection Tag Expired',
+    'Safety Reflective Triangle Missing (x2)',
+    'First Aid Kit Incomplete / Expired',
+    'Safety High-Visibility Vest Missing',
+  ],
+  body_passenger_doors: [
+    'Cargo Door Latch / Lock Broken',
+    'Body Panel Dented / Protruding',
+    'Side Curtain / Canvas Torn',
+    'Roller Shutter Sticking / Jammed',
+    'Cabin Door Does Not Latch Securely',
+    'Side Mirror Broken / Missing Glass',
+    'Windshield Wiper Blade Torn / Damaged',
+  ],
+  diesel_fuel_cap: [
+    'Diesel Filler Cap Missing',
+    'Tank Cap Seal Damaged / Broken Lock',
+    'Diesel Fuel Leak Around Tank / Filter',
+    'Fuel Odor / Diesel Dripping Below',
+    'Fuel Tank Mounting Strap Loose',
+  ],
+  fluids_powertrain: [
+    'Engine Oil Dipstick Level Below Min',
+    'Engine Oil Dark / Contaminated',
+    'Battery Terminals Heavily Corroded',
+    'Transmission / Gearbox Fluid Leak',
+    'Engine Oil Dripping Underneath Engine',
+    'Clutch Fluid Level Below Min',
+    'Excessive Exhaust Smoke / Black Smoke',
+  ],
 };
 
 export const Checklist10Points: React.FC<Props> = ({
@@ -307,34 +381,59 @@ export const Checklist10Points: React.FC<Props> = ({
     }
   };
 
-  const handleDefectNoteChange = (itemId: string, note: string) => {
-    updateItemField(itemId, { defectNote: note });
-  };
+  const handleToggleDefectTag = (itemId: string, tag: string) => {
+    const item = items.find((i) => i.id === itemId);
+    const existingTags: string[] =
+      item?.defectTags && item.defectTags.length > 0
+        ? [...item.defectTags]
+        : item?.defectNote
+        ? item.defectNote
+            .split(/[;\n]/)
+            .map((t) => t.trim())
+            .filter(Boolean)
+        : [];
 
-  const handleTagClick = (itemId: string, currentNote: string, tag: string) => {
-    if (currentNote.includes(tag)) {
-      const updated = currentNote
-        .replace(tag, '')
-        .replace(/,\s*,/g, ',')
-        .replace(/^,\s*|\s*,\s*$/g, '')
-        .trim();
-      updateItemField(itemId, { defectNote: updated });
+    let newTags: string[];
+    if (existingTags.includes(tag)) {
+      newTags = existingTags.filter((t) => t !== tag);
     } else {
-      const updated = currentNote ? `${currentNote}, ${tag}` : tag;
-      updateItemField(itemId, { defectNote: updated });
+      newTags = [...existingTags, tag];
     }
+
+    const noteString = newTags.join(';\n');
+    updateItemField(itemId, {
+      defectTags: newTags,
+      defectNote: noteString,
+      status: newTags.length > 0 ? 'Fail' : 'Pass',
+    });
   };
 
   const handleToggleFailedPart = (itemId: string, partName: string) => {
-    const current = currentItem.defectNote || '';
+    const item = items.find((i) => i.id === itemId);
     const tag = `[Failed: ${partName}]`;
-    if (current.includes(tag)) {
-      const updated = current.replace(tag, '').trim();
-      updateItemField(itemId, { defectNote: updated });
+    const existingTags: string[] =
+      item?.defectTags && item.defectTags.length > 0
+        ? [...item.defectTags]
+        : item?.defectNote
+        ? item.defectNote
+            .split(/[;\n]/)
+            .map((t) => t.trim())
+            .filter(Boolean)
+        : [];
+
+    let newTags: string[];
+    if (existingTags.includes(tag)) {
+      newTags = existingTags.filter((t) => t !== tag);
     } else {
-      const updated = current ? `${tag} ${current}` : `${tag} Component defect detected`;
-      updateItemField(itemId, { defectNote: updated });
+      newTags = [...existingTags, tag];
     }
+
+    const noteString = newTags.join(';\n');
+    updateItemField(itemId, {
+      defectTags: newTags,
+      defectNote: noteString,
+      status: newTags.length > 0 ? 'Fail' : 'Pass',
+    });
   };
 
   const handleSystemCheckToggle = (itemId: string, checkKey: string, checkLabel: string, checked: boolean) => {
@@ -1051,72 +1150,107 @@ export const Checklist10Points: React.FC<Props> = ({
                 </div>
               )}
 
-              {/* If checklist items: choose which check failed */}
-              {activeCheckList.length > 0 && (
-                <div className="space-y-1">
-                  <span className="font-bold text-rose-900 text-[10px] uppercase tracking-wider block">
-                    Choose Which Component Failed:
-                  </span>
-                  <div className="flex flex-wrap gap-1">
-                    {activeCheckList.map((chk) => {
-                      const isSelected = (currentItem.defectNote || '').includes(`[Failed: ${chk.label}]`);
-                      return (
-                        <button
-                          key={chk.key}
-                          type="button"
-                          onClick={() => handleToggleFailedPart(currentItem.id, chk.label)}
-                          className={`text-[10px] px-2 py-0.5 rounded-md font-bold transition border cursor-pointer ${
-                            isSelected
-                              ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
-                              : 'bg-white text-rose-800 border-rose-300 hover:bg-rose-100'
-                          }`}
-                        >
-                          {isSelected ? `✓ ${chk.label}` : `+ ${chk.label}`}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+              {/* DEFECT TAG SELECTION AREA (STRICTLY NO MANUAL TYPING - SELECTION ONLY) */}
+              {(() => {
+                const selectedTags: string[] =
+                  currentItem.defectTags && currentItem.defectTags.length > 0
+                    ? currentItem.defectTags
+                    : currentItem.defectNote
+                    ? currentItem.defectNote
+                        .split(/[;\n]/)
+                        .map((t) => t.trim().replace(/^\[Failed:\s*([^\]]+)\]/, '$1 Faulty'))
+                        .filter(Boolean)
+                    : [];
 
-              {/* Quick defect tags */}
-              {COMMON_DEFECT_TAGS[currentItem.id] && (
-                <div className="space-y-1">
-                  <span className="font-bold text-rose-900 text-[10px] uppercase tracking-wider block">
-                    Quick Defect Tags:
-                  </span>
-                  <div className="flex flex-wrap gap-1">
-                    {COMMON_DEFECT_TAGS[currentItem.id].map((tag) => (
-                      <button
-                        key={tag}
-                        type="button"
-                        onClick={() => handleTagClick(currentItem.id, currentItem.defectNote || '', tag)}
-                        className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition cursor-pointer border ${
-                          (currentItem.defectNote || '').includes(tag)
-                            ? 'bg-rose-600 text-white border-rose-600'
-                            : 'bg-white text-rose-800 border-rose-200 hover:bg-rose-100'
-                        }`}
-                      >
-                        {tag}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+                const availableTags = COMMON_DEFECT_TAGS[currentItem.id] || [];
 
-              {/* Defect remark text */}
-              <div className="space-y-1">
-                <span className="font-bold text-rose-900 text-[10px] uppercase tracking-wider block">
-                  Defect Remark (Required):
-                </span>
-                <textarea
-                  rows={2}
-                  value={currentItem.defectNote || ''}
-                  onChange={(e) => handleDefectNoteChange(currentItem.id, e.target.value)}
-                  placeholder="Selected failed parts and defect remark will be logged for maintenance..."
-                  className="w-full bg-white border border-rose-300 rounded-lg p-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-rose-500"
-                />
-              </div>
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-rose-200 pb-1.5">
+                      <div className="flex items-center gap-1.5 text-rose-900 font-bold text-xs uppercase tracking-wider">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>Defect Tag Selection (Tap to Select • No Typing)</span>
+                      </div>
+                      <span className="text-[10px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">
+                        {selectedTags.length} Selected
+                      </span>
+                    </div>
+
+                    {/* Pre-defined Defect Tag Options - Clean One-by-One / Grid List */}
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] font-bold text-rose-800 uppercase tracking-wider block">
+                        Tap any defect reason to tag this fault:
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
+                        {availableTags.map((tag) => {
+                          const isSelected = selectedTags.includes(tag);
+                          return (
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => handleToggleDefectTag(currentItem.id, tag)}
+                              className={`w-full p-2.5 rounded-xl text-left text-xs font-semibold flex items-center justify-between gap-2 transition cursor-pointer border ${
+                                isSelected
+                                  ? 'bg-rose-600 text-white border-rose-700 shadow-xs ring-2 ring-rose-300'
+                                  : 'bg-white hover:bg-rose-50/80 text-slate-800 border-rose-200 hover:border-rose-300'
+                              }`}
+                            >
+                              <span className="flex-1 text-[11px] leading-snug">{tag}</span>
+                              <span
+                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 text-[10px] font-bold ${
+                                  isSelected
+                                    ? 'bg-white text-rose-600'
+                                    : 'border border-slate-300 bg-slate-50 text-transparent'
+                                }`}
+                              >
+                                ✓
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Selected Defect List - Displayed Line by Line */}
+                    <div className="bg-rose-50/80 border border-rose-200 rounded-xl p-3 space-y-2">
+                      <span className="text-[10px] font-bold text-rose-900 uppercase tracking-wider block">
+                        Selected Defect Faults (已选缺陷故障清单):
+                      </span>
+
+                      {selectedTags.length === 0 ? (
+                        <div className="text-xs text-rose-600 font-medium italic p-2 bg-white rounded-lg border border-rose-200 flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                          <span>Please tap at least one defect tag above to specify the vehicle fault. Manual typing is disabled.</span>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {selectedTags.map((tag, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-center justify-between bg-white border border-rose-200 px-3 py-2 rounded-xl text-xs font-bold text-rose-900 shadow-2xs"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="w-5 h-5 rounded-full bg-rose-100 text-rose-700 text-[10px] font-mono flex items-center justify-center font-bold shrink-0">
+                                  {idx + 1}
+                                </span>
+                                <span className="text-slate-800 font-semibold">{tag}</span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleDefectTag(currentItem.id, tag)}
+                                className="text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg p-1 text-xs font-bold cursor-pointer transition"
+                                title="Remove this defect tag"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
