@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Vehicle, Driver, InspectionCheckItem, InspectionPhoto, CheckStatus, isSaturdayInspection } from '../../types';
+import { Vehicle, Driver, InspectionCheckItem, InspectionPhoto, CheckStatus, isSaturdayInspection, requiresFull15PhotoInspection } from '../../types';
 import { getCurrentGps, applyWatermarkToImage } from '../../lib/cameraWatermark';
 import { getCheckpointRequiredPhotoCount, getCheckpointSlots } from '../../lib/checkpointConfig';
 import { CHECKPOINT_EXAMPLES, ExamplePhotoGuide } from '../../lib/checkpointExamples';
@@ -146,11 +146,19 @@ export const Checklist10Points: React.FC<Props> = ({
   }, []);
 
   const isSaturday = isSaturdayInspection();
+  const isFullAudit = requiresFull15PhotoInspection(vehicle, isSaturday);
   const currentItem = items[currentCardIndex] || items[0];
-  const requiredPhotoCount = getCheckpointRequiredPhotoCount(currentItem?.id, isSaturday);
-  const slots = getCheckpointSlots(currentItem?.id, isSaturday);
+  const requiredPhotoCount = getCheckpointRequiredPhotoCount(currentItem?.id, isFullAudit);
+  const slots = getCheckpointSlots(currentItem?.id, isFullAudit);
   const itemPhotos = photos.filter((p) => p.itemId === currentItem?.id);
-  const exampleGuide: ExamplePhotoGuide | undefined = currentItem ? CHECKPOINT_EXAMPLES[currentItem.id] : undefined;
+  // Card 3 (Lights & Indicators) and Card 8 (Emergency Equipment) do not need example photos
+  const isExcludedFromExamplePhoto =
+    currentItem?.id === 'lights_indicators' ||
+    currentItem?.id === 'emergency_equipment' ||
+    currentItem?.code === 3 ||
+    currentItem?.code === 8;
+  const exampleGuide: ExamplePhotoGuide | undefined =
+    currentItem && !isExcludedFromExamplePhoto ? CHECKPOINT_EXAMPLES[currentItem.id] : undefined;
   
   // Resolve slot-specific example photo (e.g. Front-Right tyre vs Front-Left tyre)
   const currentSlot = slots?.find((s) => s.index === activeSlotIndex) || slots?.[0];
@@ -414,7 +422,7 @@ export const Checklist10Points: React.FC<Props> = ({
   const isCardCompleted = (idx: number) => {
     const it = items[idx];
     if (!it) return false;
-    const req = getCheckpointRequiredPhotoCount(it.id, isSaturday);
+    const req = getCheckpointRequiredPhotoCount(it.id, isFullAudit);
     const count = photos.filter((p) => p.itemId === it.id).length;
     return count >= req;
   };
@@ -460,8 +468,10 @@ export const Checklist10Points: React.FC<Props> = ({
 
         {/* Routine Type Label */}
         <div className="flex items-center justify-between text-[10px] font-mono font-bold px-1">
-          <span className="text-slate-500">
-            {isSaturday ? 'Saturday Deep Audit (Full Set • 15 Photos)' : 'Mon - Fri Routine (5 Points • 6 Photos • Meter Last)'}
+          <span className={isFullAudit ? 'text-amber-700 font-semibold' : 'text-slate-500'}>
+            {isFullAudit
+              ? (isFeeder ? '🚚 Feeder Daily Audit (Full Set • 15 Photos)' : '⚡ Saturday Deep Audit (Full Set • 15 Photos)')
+              : '🚐 Sales Truck Routine (5 Points • 6 Photos • Meter Last)'}
           </span>
           <span className="text-slate-400">
             {currentCardIndex + 1} of {items.length} Checkpoints

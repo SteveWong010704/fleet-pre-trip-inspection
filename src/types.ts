@@ -146,6 +146,8 @@ export interface InspectionRecord {
   };
   defectCount: number;
   defectSummary?: string;
+  primaryPhotoUrl?: string;
+  photoCount?: number;
   photos: InspectionPhoto[];
   gpsLocation?: {
     lat: number;
@@ -338,8 +340,38 @@ export function isSaturdayInspection(): boolean {
   return new Date().getDay() === 6;
 }
 
-export function getActiveInspectionItems(isSaturday: boolean = isSaturdayInspection()): Omit<InspectionCheckItem, 'status' | 'defectNote' | 'photoUrl'>[] {
-  return isSaturday ? SATURDAY_FULL_ITEMS : WEEKDAY_6_POINT_ITEMS;
+/**
+ * Helper to identify if a vehicle is classified as a Feeder (Long-haul / Heavy).
+ */
+export function isFeederVehicle(veh?: { truckCategory?: string; model?: string } | null): boolean {
+  if (!veh) return false;
+  const cat = String(veh.truckCategory || '').trim().toLowerCase();
+  const model = String(veh.model || '').trim().toLowerCase();
+  return cat === 'feeder' || model.includes('feeder');
+}
+
+/**
+ * Inspection photo requirement rules:
+ * - Feeder trucks: ALWAYS require 15 photos fullset every day (Monday through Saturday/Sunday).
+ * - Sales trucks (Small Truck):
+ *   - Mon ~ Fri: 6 photos routine (5 checkpoints, 6 photos)
+ *   - Saturday: 15 photos fullset (10 checkpoints, 15 photos)
+ */
+export function requiresFull15PhotoInspection(
+  target?: boolean | { truckCategory?: string; model?: string } | null,
+  isSaturday: boolean = isSaturdayInspection()
+): boolean {
+  if (typeof target === 'boolean') return target;
+  if (isFeederVehicle(target)) return true;
+  return isSaturday;
+}
+
+export function getActiveInspectionItems(
+  target?: boolean | { truckCategory?: string; model?: string } | null,
+  isSaturday: boolean = isSaturdayInspection()
+): Omit<InspectionCheckItem, 'status' | 'defectNote' | 'photoUrl'>[] {
+  const isFullSet = requiresFull15PhotoInspection(target, isSaturday);
+  return isFullSet ? SATURDAY_FULL_ITEMS : WEEKDAY_6_POINT_ITEMS;
 }
 
 export const STANDARD_10_POINT_ITEMS = SATURDAY_FULL_ITEMS;

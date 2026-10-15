@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Driver, Vehicle, InspectionCheckItem, InspectionPhoto, InspectionRecord, STANDARD_10_POINT_ITEMS, getActiveInspectionItems, isSaturdayInspection, AdminUser } from './types';
+import { Driver, Vehicle, InspectionCheckItem, InspectionPhoto, InspectionRecord, STANDARD_10_POINT_ITEMS, getActiveInspectionItems, isSaturdayInspection, requiresFull15PhotoInspection, AdminUser } from './types';
 import { Navbar } from './components/Navbar';
 import { DriverAuth } from './components/DriverApp/DriverAuth';
 import { VehicleScanner } from './components/DriverApp/VehicleScanner';
@@ -56,7 +56,7 @@ export default function App() {
       ? veh.truckCategory === 'Feeder' || String(veh.model || '').toLowerCase().includes('feeder')
       : false;
 
-    const activeItems = getActiveInspectionItems(isSaturdayInspection());
+    const activeItems = getActiveInspectionItems(veh);
 
     return activeItems.map((item) => ({
       ...item,
@@ -82,10 +82,10 @@ export default function App() {
   const [photoAlertMessage, setPhotoAlertMessage] = useState<string>('');
 
   const handleProceedToDeclaration = () => {
-    // Check if every checkpoint has satisfied its photo requirement
-    const isSaturday = isSaturdayInspection();
+    // Check if every checkpoint has satisfied its photo requirement (Feeder: 15 photos daily, Sales truck: Mon-Fri 6 photos, Sat 15 photos)
+    const isFullAudit = requiresFull15PhotoInspection(selectedVehicle);
     for (const item of checklistItems) {
-      const required = getCheckpointRequiredPhotoCount(item.id, isSaturday);
+      const required = getCheckpointRequiredPhotoCount(item.id, isFullAudit);
       const count = photos.filter(p => p.itemId === item.id).length;
       if (count < required) {
         setPhotoAlertMessage(`Checkpoint #${item.code} (${item.title}) requires ${required} photo(s). Currently taken: ${count}`);
@@ -249,18 +249,18 @@ export default function App() {
                 <div className="sm:hidden flex items-center justify-between">
                   <div className="flex items-center space-x-2">
                     <span className="w-6 h-6 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center">
-                      {driverStep === 'scanner' ? '1' : driverStep === 'checklist' ? '2' : '3'}
+                      {driverStep === 'scanner' ? '1' : (driverStep as string) === 'checklist' ? '2' : '3'}
                     </span>
                     <span className="font-bold text-slate-900 text-xs">
                       {driverStep === 'scanner'
                         ? 'Step 1: Vehicle Assignment'
-                        : driverStep === 'checklist'
+                        : (driverStep as string) === 'checklist'
                         ? 'Step 2: 10-Point Card Inspection'
                         : 'Step 3: Meter & Declaration'}
                     </span>
                   </div>
                   <span className="text-[11px] font-semibold text-slate-400">
-                    {driverStep === 'scanner' ? '1/3' : driverStep === 'checklist' ? '2/3' : '3/3'}
+                    {driverStep === 'scanner' ? '1/3' : (driverStep as string) === 'checklist' ? '2/3' : '3/3'}
                   </span>
                 </div>
 
@@ -279,11 +279,11 @@ export default function App() {
                   <ArrowRight className="w-4 h-4 text-slate-300" />
                   <div className="flex items-center space-x-2">
                     <span className={`w-7 h-7 rounded-full flex items-center justify-center font-bold transition ${
-                      driverStep === 'checklist' ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/30' : 'bg-slate-100 text-slate-500'
+                      (driverStep as string) === 'checklist' ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/30' : 'bg-slate-100 text-slate-500'
                     }`}>
                       2
                     </span>
-                    <span className={driverStep === 'checklist' ? 'font-bold text-blue-600' : 'text-slate-500 font-medium'}>
+                    <span className={(driverStep as string) === 'checklist' ? 'font-bold text-blue-600' : 'text-slate-500 font-medium'}>
                       Step 2: 10-Point Card Inspection (10 Cards)
                     </span>
                   </div>

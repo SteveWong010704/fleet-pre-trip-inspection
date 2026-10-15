@@ -1232,6 +1232,8 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
   }
 
   const vehicleObj = getVehicleByPlate(inspectionData.vehicleNo);
+  const primaryPhotoUrl = cleanPhotos?.[0]?.url || cleanItems?.find(i => i.photoUrl)?.photoUrl || '';
+  const photoCount = cleanPhotos?.length || 0;
 
   const record: InspectionRecord = {
     ...inspectionData,
@@ -1239,6 +1241,8 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
     route: inspectionData.route || vehicleObj?.assignedRoute || (vehicleObj as any)?.route || 'Default Route',
     items: cleanItems || [],
     photos: cleanPhotos || [],
+    primaryPhotoUrl,
+    photoCount,
     checkpoints: cleanCheckpoints,
     defects: cleanDefects,
     signature: cleanSignature,
