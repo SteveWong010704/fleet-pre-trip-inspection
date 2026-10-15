@@ -88,6 +88,7 @@ export interface InspectionCheckItem {
   subtext: string;
   status: CheckStatus;
   defectNote?: string;
+  defectTags?: string[];
   photoUrl?: string;
   photos?: string[];
   dashboardChecks?: {

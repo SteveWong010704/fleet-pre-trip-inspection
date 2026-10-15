@@ -292,7 +292,7 @@ export const InspectionHistory: React.FC = () => {
   // Checkpoint definitions for itemized Defect Audit Matrix extraction
   const AUDIT_CHECKPOINT_DEFS = [
     { key: 'tires_wheels', code: 1, name: 'Tires & Wheels' },
-    { key: 'brake_system', code: 2, name: 'Brake System' },
+    { key: 'brake_system', code: 2, name: 'Brake System & Fluid' },
     { key: 'lights_indicators', code: 3, name: 'Lights & Indicators' },
     { key: 'steering_handling', code: 4, name: 'Steering & Handling' },
     { key: 'radiator_coolant', code: 5, name: 'Radiator & Coolant' },
@@ -303,10 +303,94 @@ export const InspectionHistory: React.FC = () => {
     { key: 'dashboard_warnings', code: 10, name: 'Dashboard & Meter' },
   ];
 
+  const isBrakeKeyword = (text?: string): boolean => {
+    if (!text) return false;
+    const lower = text.toLowerCase();
+    return (
+      lower.includes('brake') ||
+      lower.includes('brek') ||
+      lower.includes('handbrake') ||
+      lower.includes('foot brake') ||
+      lower.includes('spongy pedal') ||
+      lower.includes('air pressure')
+    );
+  };
+
   const getCheckpointPartStatus = (record: InspectionRecord, checkpointKey: string): { status: 'Good' | 'Grounded' | 'N/A'; note?: string; text: string } => {
-    const item = Array.isArray(record.items)
-      ? record.items.find(i => i.id === checkpointKey || i.code === AUDIT_CHECKPOINT_DEFS.find(d => d.key === checkpointKey)?.code)
-      : undefined;
+    const items = Array.isArray(record.items) ? record.items : [];
+
+    // Match item strictly by item.id first!
+    let item = items.find(i => i.id === checkpointKey);
+
+    // Fallback ONLY for legacy 10-point records where items had no .id property:
+    if (!item && !items.some(i => Boolean(i.id)) && items.length >= 10) {
+      const targetDef = AUDIT_CHECKPOINT_DEFS.find(d => d.key === checkpointKey);
+      if (targetDef) {
+        item = items.find(i => i.code === targetDef.code);
+      }
+    }
+
+    // SPECIAL HANDLING: Checkpoint 2 (Brake System & Fluid) vs Checkpoint 6 (Engine Oil & Powertrain)
+    // Rule: Anything related to brake (brake fluid, foot brake, handbrake, air pressure) belongs strictly under Checkpoint 2.
+    if (checkpointKey === 'brake_system') {
+      // 1. Direct fail on brake_system checkpoint
+      if (item && item.status === 'Fail') {
+        const note = (item.defectNote || 'Brake system fault flagged').trim();
+        return { status: 'Grounded', note, text: `GROUNDED: ${note}` };
+      }
+
+      // 2. Re-attribute any brake defect recorded under Checkpoint 6 (fluids_powertrain) or other checkpoints
+      const fluidsItem = items.find(i => i.id === 'fluids_powertrain');
+      if (fluidsItem) {
+        if (fluidsItem.status === 'Fail' && isBrakeKeyword(fluidsItem.defectNote)) {
+          const brakeNote = fluidsItem.defectNote!.trim();
+          return { status: 'Grounded', note: brakeNote, text: `GROUNDED: ${brakeNote}` };
+        }
+        if (fluidsItem.systemChecks && fluidsItem.systemChecks.brake_fluid === false) {
+          return { status: 'Grounded', note: 'Brake fluid reservoir below Min', text: 'GROUNDED: Brake fluid reservoir below Min' };
+        }
+      }
+
+      // 3. Check overall defect summary if record failed and mentions brake
+      if (record.overallResult === 'Fail' && record.defectSummary && isBrakeKeyword(record.defectSummary)) {
+        return { status: 'Grounded', note: record.defectSummary, text: `GROUNDED: ${record.defectSummary}` };
+      }
+
+      if (item && item.status === 'NA') {
+        return { status: 'N/A', text: 'N/A' };
+      }
+
+      return { status: 'Good', text: 'Good (Brakes & Fluid OK)' };
+    }
+
+    if (checkpointKey === 'fluids_powertrain') {
+      if (item && item.status === 'Fail') {
+        const rawNote = (item.defectNote || '').trim();
+        // If defect was purely about brake fluid or brakes, do not ground Checkpoint 6 for it!
+        if (isBrakeKeyword(rawNote)) {
+          const nonBrakeParts = rawNote
+            .split(/[;,]/)
+            .map(s => s.trim())
+            .filter(s => s.length > 0 && !isBrakeKeyword(s));
+
+          if (nonBrakeParts.length === 0) {
+            // Solely a brake defect; it is moved to Checkpoint 2 so Checkpoint 6 is Good
+            return { status: 'Good', text: 'Good (Engine Oil & Powertrain Pass)' };
+          } else {
+            const sanitizedNote = nonBrakeParts.join('; ');
+            return { status: 'Grounded', note: sanitizedNote, text: `GROUNDED: ${sanitizedNote}` };
+          }
+        }
+
+        return { status: 'Grounded', note: rawNote, text: `GROUNDED: ${rawNote}` };
+      }
+
+      if (item && item.status === 'NA') {
+        return { status: 'N/A', text: 'N/A' };
+      }
+
+      return { status: 'Good', text: 'Good (Engine Oil & Powertrain Pass)' };
+    }
 
     if (!item) {
       return { status: 'Good', text: 'Good (Routine Pass)' };
@@ -339,133 +423,307 @@ export const InspectionHistory: React.FC = () => {
     return grounded.length > 0 ? grounded.join('; ') : 'None (All Systems Good)';
   };
 
-  // Export to Excel (.xlsx) with full defect parts breakdown (Good / Grounded) & Photo URLs
+  // Helper to extract checkpoint photo URL
+  const getCheckpointPhotoUrl = (record: InspectionRecord, checkpointKey: string): string => {
+    if (Array.isArray(record.photos)) {
+      const p = record.photos.find(ph => ph.itemId === checkpointKey);
+      if (p && p.url) return p.url;
+    }
+    if (Array.isArray(record.items)) {
+      const it = record.items.find(i => i.id === checkpointKey);
+      if (it && it.photoUrl) return it.photoUrl;
+    }
+    return '-';
+  };
+
+  interface DefectEntry {
+    tag: string;
+    remark: string;
+  }
+
+  // Parse structured defect tags and remarks for a specific checkpoint
+  const getCheckpointDefects = (record: InspectionRecord, checkpointKey: string): DefectEntry[] => {
+    const items = Array.isArray(record.items) ? record.items : [];
+    let item = items.find(i => i.id === checkpointKey);
+    if (!item && !items.some(i => Boolean(i.id)) && items.length >= 10) {
+      const targetDef = AUDIT_CHECKPOINT_DEFS.find(d => d.key === checkpointKey);
+      if (targetDef) {
+        item = items.find(i => i.code === targetDef.code);
+      }
+    }
+
+    const defects: DefectEntry[] = [];
+
+    const parseItemDefects = (it: any): DefectEntry[] => {
+      const list: DefectEntry[] = [];
+      const tags: string[] = Array.isArray(it.defectTags) && it.defectTags.length > 0 ? it.defectTags : [];
+
+      if (tags.length > 0) {
+        tags.forEach((t: string) => {
+          const raw = (t || '').trim();
+          if (!raw) return;
+          const slotMatch = raw.match(/^\[Failed:\s*([^\]]+)\]\s*(.*)$/i);
+          if (slotMatch) {
+            const slotName = slotMatch[1].trim();
+            const tagText = slotMatch[2].trim() || 'Defect';
+            list.push({ tag: tagText, remark: `${slotName}: ${tagText}` });
+          } else {
+            list.push({ tag: raw, remark: raw });
+          }
+        });
+      }
+
+      // If no tags or need to extract from defectNote
+      if (list.length === 0 && it.defectNote && it.defectNote.trim()) {
+        const parts = it.defectNote.split(/[;\n]/).map((s: string) => s.trim()).filter(Boolean);
+        parts.forEach((p: string) => {
+          const slotMatch = p.match(/^\[Failed:\s*([^\]]+)\]\s*(.*)$/i);
+          if (slotMatch) {
+            const slotName = slotMatch[1].trim();
+            const tagText = slotMatch[2].trim() || 'Defect';
+            list.push({ tag: tagText, remark: `${slotName}: ${tagText}` });
+          } else {
+            list.push({ tag: p, remark: p });
+          }
+        });
+      }
+
+      // Parse systemChecks
+      if (it.systemChecks) {
+        Object.entries(it.systemChecks).forEach(([chkKey, chkVal]) => {
+          if (chkVal === false) {
+            const checkLabel = chkKey.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase());
+            const tag = `${checkLabel} Fault`;
+            if (!list.some(d => d.tag.toLowerCase().includes(checkLabel.toLowerCase()))) {
+              list.push({ tag, remark: `${checkLabel} failed physical check` });
+            }
+          }
+        });
+      }
+
+      // Parse dashboardChecks
+      if (it.id === 'dashboard_warnings' && it.dashboardChecks) {
+        const dc = it.dashboardChecks;
+        if (dc.engineLightOff === false && !list.some(d => d.tag.includes('Engine'))) {
+          list.push({ tag: 'Check Engine Warning Lamp ON', remark: 'Check Engine indicator active' });
+        }
+        if (dc.doubleSignalOk === false && !list.some(d => d.tag.includes('Signal') || d.tag.includes('Hazard'))) {
+          list.push({ tag: 'Hazard / Double Signal Faulty', remark: 'Hazard blinkers faulty' });
+        }
+        if (dc.batteryLightOff === false && !list.some(d => d.tag.includes('Battery'))) {
+          list.push({ tag: 'Alternator / Battery Lamp ON', remark: 'Battery / charging warning lamp ON' });
+        }
+        if (dc.oilLightOff === false && !list.some(d => d.tag.includes('Oil'))) {
+          list.push({ tag: 'Engine Oil Pressure Lamp ON', remark: 'Low engine oil pressure indicator ON' });
+        }
+      }
+
+      if (list.length === 0 && it.status === 'Fail') {
+        list.push({
+          tag: 'Defect Flagged',
+          remark: it.defectNote?.trim() || 'Defect reported',
+        });
+      }
+
+      return list;
+    };
+
+    // Rule: Anything related to brake belongs strictly under Checkpoint 2 (brake_system)
+    if (checkpointKey === 'brake_system') {
+      if (item && item.status === 'Fail') {
+        defects.push(...parseItemDefects(item));
+      }
+      // Re-attribute any brake defect from fluids_powertrain
+      const fluidsItem = items.find(i => i.id === 'fluids_powertrain');
+      if (fluidsItem) {
+        if (fluidsItem.status === 'Fail' && isBrakeKeyword(fluidsItem.defectNote)) {
+          const rawNote = fluidsItem.defectNote!.trim();
+          const brakeParts = rawNote.split(/[;\n]/).map(s => s.trim()).filter(s => isBrakeKeyword(s));
+          brakeParts.forEach(bp => {
+            defects.push({
+              tag: 'Brake Fluid Below Min / Reservoir Leak',
+              remark: bp.replace(/^\[Failed:\s*([^\]]+)\]/, '$1: ').trim(),
+            });
+          });
+        }
+        if (fluidsItem.systemChecks && fluidsItem.systemChecks.brake_fluid === false) {
+          if (!defects.some(d => d.tag.includes('Brake Fluid'))) {
+            defects.push({
+              tag: 'Brake Fluid Below Min / Reservoir Leak',
+              remark: 'Brake fluid reservoir below MIN line',
+            });
+          }
+        }
+      }
+      if (defects.length === 0 && record.overallResult === 'Fail' && record.defectSummary && isBrakeKeyword(record.defectSummary)) {
+        defects.push({
+          tag: 'Brake System Defect',
+          remark: record.defectSummary,
+        });
+      }
+      return defects;
+    }
+
+    if (checkpointKey === 'fluids_powertrain') {
+      if (item && item.status === 'Fail') {
+        const raw = parseItemDefects(item);
+        // Strictly exclude all brake defects from Checkpoint 6
+        const nonBrake = raw.filter(d => !isBrakeKeyword(d.tag) && !isBrakeKeyword(d.remark));
+        defects.push(...nonBrake);
+      }
+      return defects;
+    }
+
+    if (item && item.status === 'Fail') {
+      defects.push(...parseItemDefects(item));
+    }
+
+    return defects;
+  };
+
+  // Export to Excel (.xlsx) - Single tab, Condition (Good / Defect), and Defect Tag & Remark strictly split into 2 separate rows
   const handleExportExcel = () => {
     if (filteredInspections.length === 0) {
       alert('No inspection records to export with the selected filters.');
       return;
     }
 
-    const dataRows = filteredInspections.map((r, index) => {
-      const primaryPhoto = r.primaryPhotoUrl || r.photos?.[0]?.url || (Array.isArray(r.items) ? r.items.find(i => i.photoUrl)?.photoUrl : '') || 'N/A';
-      const groundedSummary = getGroundedDefectPartsSummary(r);
-      const isGrounded = r.overallResult === 'Fail';
+    // Single Worksheet: All checkpoints listed vertically.
+    // When a defect exists, Defect Tag and Defect Remark are split into 2 distinct rows (拆成2行, no 2 data in one row).
+    let rowSequence = 0;
+    const auditRows: any[] = [];
 
-      return {
-        'No.': index + 1,
-        'Certificate ID': r.id,
-        'Date & Time': r.formattedDate,
-        'Vehicle Plate': r.vehicleNo,
-        'Brand & Model': `${r.vehicleBrand || ''} ${r.vehicleModel || ''}`.trim(),
-        'Category': r.truckCategory || 'Feeder',
-        'Branch / Depot': r.vehicleBranch || 'BL',
-        'Route / Area': r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01'),
-        'Driver ID': r.driverId,
-        'Driver Name': r.driverName,
-        'Odometer (KM)': r.odometer,
-        'Fuel Level (%)': `${r.fuelLevel}%`,
-        'Vehicle Status': isGrounded ? 'GROUNDED' : 'Ready (Good)',
-        'Overall Result': r.overallResult,
-        'Defect Count': r.defectCount,
-        'Grounded Parts List': groundedSummary,
-        'Defect Summary': r.defectSummary || (r.overallResult === 'Pass' ? 'None (All 10 Pass)' : 'Defects Reported'),
-        'Inspection Photo URL': primaryPhoto,
-        'Photos Captured': r.photoCount || r.photos?.length || 0,
-        '[1] Tires & Wheels': getCheckpointPartStatus(r, 'tires_wheels').text,
-        '[2] Brake System': getCheckpointPartStatus(r, 'brake_system').text,
-        '[3] Lights & Indicators': getCheckpointPartStatus(r, 'lights_indicators').text,
-        '[4] Steering & Handling': getCheckpointPartStatus(r, 'steering_handling').text,
-        '[5] Radiator & Coolant': getCheckpointPartStatus(r, 'radiator_coolant').text,
-        '[6] Engine Oil & Powertrain': getCheckpointPartStatus(r, 'fluids_powertrain').text,
-        '[7] Diesel Fuel Cap & Tank': getCheckpointPartStatus(r, 'diesel_fuel_cap').text,
-        '[8] Emergency Equipment (APAD)': getCheckpointPartStatus(r, 'emergency_equipment').text,
-        '[9] Cargo & Body': getCheckpointPartStatus(r, 'body_passenger_doors').text,
-        '[10] Dashboard & Meter': getCheckpointPartStatus(r, 'dashboard_warnings').text,
-        'GPS Latitude': r.gpsLocation?.lat || 'N/A',
-        'GPS Longitude': r.gpsLocation?.lng || 'N/A',
-      };
+    filteredInspections.forEach((r, recordIndex) => {
+      const isGrounded = r.overallResult === 'Fail';
+      const gps = r.gpsLocation?.lat && r.gpsLocation?.lng
+        ? `${r.gpsLocation.lat.toFixed(5)}, ${r.gpsLocation.lng.toFixed(5)}`
+        : 'N/A';
+
+      AUDIT_CHECKPOINT_DEFS.forEach((cp) => {
+        const defects = getCheckpointDefects(r, cp.key);
+        const partStatus = getCheckpointPartStatus(r, cp.key);
+        const photoUrl = getCheckpointPhotoUrl(r, cp.key);
+
+        if (defects.length > 0) {
+          // Checkpoint has defect(s) -> split each defect into 2 separate rows:
+          // Row 1 for Defect Tag, Row 2 for Defect Remark
+          defects.forEach((def) => {
+            // Row 1: Defect Tag
+            rowSequence++;
+            auditRows.push({
+              'No.': rowSequence,
+              'Inspection Seq': recordIndex + 1,
+              'Certificate ID': r.id,
+              'Inspection Date & Time': r.formattedDate,
+              'Vehicle Plate': r.vehicleNo,
+              'Vehicle Type': r.truckCategory || 'Small Truck',
+              'Branch / Depot': r.vehicleBranch || 'BL',
+              'Route / Area': r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01'),
+              'Driver Name': r.driverName,
+              'Driver ID': r.driverId,
+              'Odometer (KM)': r.odometer,
+              'Fuel Level (%)': `${r.fuelLevel}%`,
+              'Checkpoint Code': cp.code,
+              'Inspection Part Name': `[${cp.code}] ${cp.name}`,
+              'Condition': 'Defect',
+              'Defect Entry Type': 'Defect Tag',
+              'Defect Tag': def.tag,
+              'Defect Remark': '-',
+              'Photo Evidence URL': photoUrl,
+              'GPS Coordinates': gps,
+              'Vehicle Overall Status': isGrounded ? 'GROUNDED' : 'Ready (Good)',
+            });
+
+            // Row 2: Defect Remark (拆成第2行，不放2个data在同一行)
+            rowSequence++;
+            auditRows.push({
+              'No.': rowSequence,
+              'Inspection Seq': recordIndex + 1,
+              'Certificate ID': r.id,
+              'Inspection Date & Time': r.formattedDate,
+              'Vehicle Plate': r.vehicleNo,
+              'Vehicle Type': r.truckCategory || 'Small Truck',
+              'Branch / Depot': r.vehicleBranch || 'BL',
+              'Route / Area': r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01'),
+              'Driver Name': r.driverName,
+              'Driver ID': r.driverId,
+              'Odometer (KM)': r.odometer,
+              'Fuel Level (%)': `${r.fuelLevel}%`,
+              'Checkpoint Code': cp.code,
+              'Inspection Part Name': `[${cp.code}] ${cp.name}`,
+              'Condition': 'Defect',
+              'Defect Entry Type': 'Defect Remark',
+              'Defect Tag': '-',
+              'Defect Remark': def.remark,
+              'Photo Evidence URL': photoUrl,
+              'GPS Coordinates': gps,
+              'Vehicle Overall Status': isGrounded ? 'GROUNDED' : 'Ready (Good)',
+            });
+          });
+        } else {
+          // Checkpoint is Good or N/A -> exactly 1 single row
+          rowSequence++;
+          const condition = partStatus.status === 'N/A' ? 'N/A' : 'Good';
+          auditRows.push({
+            'No.': rowSequence,
+            'Inspection Seq': recordIndex + 1,
+            'Certificate ID': r.id,
+            'Inspection Date & Time': r.formattedDate,
+            'Vehicle Plate': r.vehicleNo,
+            'Vehicle Type': r.truckCategory || 'Small Truck',
+            'Branch / Depot': r.vehicleBranch || 'BL',
+            'Route / Area': r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01'),
+            'Driver Name': r.driverName,
+            'Driver ID': r.driverId,
+            'Odometer (KM)': r.odometer,
+            'Fuel Level (%)': `${r.fuelLevel}%`,
+            'Checkpoint Code': cp.code,
+            'Inspection Part Name': `[${cp.code}] ${cp.name}`,
+            'Condition': condition,
+            'Defect Entry Type': '-',
+            'Defect Tag': '-',
+            'Defect Remark': condition === 'Good' ? '-' : 'N/A',
+            'Photo Evidence URL': photoUrl,
+            'GPS Coordinates': gps,
+            'Vehicle Overall Status': isGrounded ? 'GROUNDED' : 'Ready (Good)',
+          });
+        }
+      });
     });
 
-    const worksheet = XLSX.utils.json_to_sheet(dataRows);
-    
-    // Auto-fit column widths
-    const columnWidths = [
-      { wch: 6 },
-      { wch: 22 },
-      { wch: 20 },
-      { wch: 14 },
-      { wch: 22 },
-      { wch: 12 },
-      { wch: 15 },
-      { wch: 15 },
-      { wch: 12 },
-      { wch: 24 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 16 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 35 },
-      { wch: 35 },
-      { wch: 35 },
-      { wch: 15 },
-      { wch: 22 },
-      { wch: 22 },
-      { wch: 22 },
-      { wch: 22 },
-      { wch: 22 },
-      { wch: 22 },
-      { wch: 22 },
-      { wch: 22 },
-      { wch: 22 },
-      { wch: 22 },
-      { wch: 14 },
-      { wch: 14 },
-    ];
-    worksheet['!cols'] = columnWidths;
-
+    // Create workbook with ONLY ONE single tab as requested (不用那么多tab, 一个就好)
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Inspection Audit Logs');
-
-    // Also include Grounded Units Hitlist sheet if any vehicles are grounded
-    const groundedOnlyRows = filteredInspections
-      .filter(r => r.overallResult === 'Fail' || r.defectCount > 0)
-      .map((r, index) => {
-        const primaryPhoto = r.primaryPhotoUrl || r.photos?.[0]?.url || (Array.isArray(r.items) ? r.items.find(i => i.photoUrl)?.photoUrl : '') || 'N/A';
-        return {
-          'No.': index + 1,
-          'Plate Number': r.vehicleNo,
-          'Type': r.truckCategory || 'Feeder',
-          'Branch': r.vehicleBranch || 'BL',
-          'Driver': `${r.driverName} (${r.driverId})`,
-          'Date & Time': r.formattedDate,
-          'Defect Count': r.defectCount,
-          'Grounded Defect Summary': r.defectSummary || 'Safety faults flagged',
-          'Failed Components': getGroundedDefectPartsSummary(r),
-          'Inspection Photo Evidence': primaryPhoto,
-          'Tires Defect': getCheckpointPartStatus(r, 'tires_wheels').status === 'Grounded' ? getCheckpointPartStatus(r, 'tires_wheels').text : 'Good',
-          'Brake Defect': getCheckpointPartStatus(r, 'brake_system').status === 'Grounded' ? getCheckpointPartStatus(r, 'brake_system').text : 'Good',
-          'Lights Defect': getCheckpointPartStatus(r, 'lights_indicators').status === 'Grounded' ? getCheckpointPartStatus(r, 'lights_indicators').text : 'Good',
-          'Steering Defect': getCheckpointPartStatus(r, 'steering_handling').status === 'Grounded' ? getCheckpointPartStatus(r, 'steering_handling').text : 'Good',
-          'Coolant Defect': getCheckpointPartStatus(r, 'radiator_coolant').status === 'Grounded' ? getCheckpointPartStatus(r, 'radiator_coolant').text : 'Good',
-          'Oil Defect': getCheckpointPartStatus(r, 'fluids_powertrain').status === 'Grounded' ? getCheckpointPartStatus(r, 'fluids_powertrain').text : 'Good',
-          'Fuel Cap Defect': getCheckpointPartStatus(r, 'diesel_fuel_cap').status === 'Grounded' ? getCheckpointPartStatus(r, 'diesel_fuel_cap').text : 'Good',
-          'APAD Safety Defect': getCheckpointPartStatus(r, 'emergency_equipment').status === 'Grounded' ? getCheckpointPartStatus(r, 'emergency_equipment').text : 'Good',
-          'Body Defect': getCheckpointPartStatus(r, 'body_passenger_doors').status === 'Grounded' ? getCheckpointPartStatus(r, 'body_passenger_doors').text : 'Good',
-          'Meter Defect': getCheckpointPartStatus(r, 'dashboard_warnings').status === 'Grounded' ? getCheckpointPartStatus(r, 'dashboard_warnings').text : 'Good',
-        };
-      });
-
-    if (groundedOnlyRows.length > 0) {
-      const wsGrounded = XLSX.utils.json_to_sheet(groundedOnlyRows);
-      XLSX.utils.book_append_sheet(workbook, wsGrounded, 'Grounded Units Hitlist');
-    }
+    const wsAudit = XLSX.utils.json_to_sheet(auditRows);
+    wsAudit['!cols'] = [
+      { wch: 6 },  // No.
+      { wch: 14 }, // Inspection Seq
+      { wch: 22 }, // Certificate ID
+      { wch: 20 }, // Date & Time
+      { wch: 14 }, // Vehicle Plate
+      { wch: 14 }, // Vehicle Type
+      { wch: 14 }, // Branch
+      { wch: 14 }, // Route
+      { wch: 18 }, // Driver Name
+      { wch: 12 }, // Driver ID
+      { wch: 14 }, // Odometer
+      { wch: 14 }, // Fuel Level
+      { wch: 16 }, // Checkpoint Code
+      { wch: 30 }, // Inspection Part Name
+      { wch: 14 }, // Condition
+      { wch: 18 }, // Defect Entry Type
+      { wch: 38 }, // Defect Tag
+      { wch: 45 }, // Defect Remark
+      { wch: 36 }, // Photo Evidence URL
+      { wch: 24 }, // GPS Coordinates
+      { wch: 22 }, // Overall Status
+    ];
+    XLSX.utils.book_append_sheet(workbook, wsAudit, 'Vehicle Inspection Audit');
 
     const timestamp = new Date().toISOString().slice(0, 10);
-    XLSX.writeFile(workbook, `Fleet_Inspection_Report_${timestamp}.xlsx`);
+    XLSX.writeFile(workbook, `Fleet_Vehicle_Inspection_Audit_${timestamp}.xlsx`);
   };
 
-  // Export to CSV with full defect parts breakdown (Good / Grounded)
+  // Export to CSV matching the single-sheet format with split rows for Defect Tag and Defect Remark
   const handleExportCSV = () => {
     if (filteredInspections.length === 0) {
       alert('No inspection records to export with the selected filters.');
@@ -474,80 +732,136 @@ export const InspectionHistory: React.FC = () => {
 
     const headers = [
       'No',
+      'Inspection Seq',
       'Certificate ID',
       'Date & Time',
       'Vehicle Plate',
-      'Brand & Model',
-      'Category',
+      'Vehicle Type',
       'Branch',
       'Route / Area',
-      'Driver ID',
       'Driver Name',
+      'Driver ID',
       'Odometer KM',
       'Fuel Level %',
-      'Vehicle Status',
-      'Overall Result',
-      'Defects',
-      'Grounded Parts List',
-      'Defect Details',
-      'Inspection Photo URL',
-      'Tires Wheels',
-      'Brake System',
-      'Lights Indicators',
-      'Steering Handling',
-      'Radiator Coolant',
-      'Engine Oil Powertrain',
-      'Diesel Fuel Cap',
-      'Emergency Equipment',
-      'Cargo Body',
-      'Dashboard Meter',
+      'Checkpoint Code',
+      'Inspection Part Name',
+      'Condition',
+      'Defect Entry Type',
+      'Defect Tag',
+      'Defect Remark',
+      'Photo Evidence URL',
+      'GPS Coordinates',
+      'Vehicle Overall Status',
     ];
 
-    const rows = filteredInspections.map((r, idx) => {
+    let rowNum = 0;
+    const rows: (string | number)[][] = [];
+
+    filteredInspections.forEach((r, recordIndex) => {
       const isGrounded = r.overallResult === 'Fail';
-      const primaryPhoto = r.primaryPhotoUrl || r.photos?.[0]?.url || (Array.isArray(r.items) ? r.items.find(i => i.photoUrl)?.photoUrl : '') || 'N/A';
-      return [
-        idx + 1,
-        `"${r.id}"`,
-        `"${r.formattedDate}"`,
-        `"${r.vehicleNo}"`,
-        `"${(r.vehicleBrand || '') + ' ' + (r.vehicleModel || '')}"`,
-        `"${r.truckCategory || 'Feeder'}"`,
-        `"${r.vehicleBranch || 'BL'}"`,
-        `"${r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01')}"`,
-        `"${r.driverId}"`,
-        `"${r.driverName}"`,
-        r.odometer,
-        r.fuelLevel,
-        `"${isGrounded ? 'GROUNDED' : 'Ready (Good)'}"`,
-        `"${r.overallResult}"`,
-        r.defectCount,
-        `"${getGroundedDefectPartsSummary(r).replace(/"/g, '""')}"`,
-        `"${(r.defectSummary || '').replace(/"/g, '""')}"`,
-        `"${primaryPhoto.replace(/"/g, '""')}"`,
-        `"${getCheckpointPartStatus(r, 'tires_wheels').text.replace(/"/g, '""')}"`,
-        `"${getCheckpointPartStatus(r, 'brake_system').text.replace(/"/g, '""')}"`,
-        `"${getCheckpointPartStatus(r, 'lights_indicators').text.replace(/"/g, '""')}"`,
-        `"${getCheckpointPartStatus(r, 'steering_handling').text.replace(/"/g, '""')}"`,
-        `"${getCheckpointPartStatus(r, 'radiator_coolant').text.replace(/"/g, '""')}"`,
-        `"${getCheckpointPartStatus(r, 'fluids_powertrain').text.replace(/"/g, '""')}"`,
-        `"${getCheckpointPartStatus(r, 'diesel_fuel_cap').text.replace(/"/g, '""')}"`,
-        `"${getCheckpointPartStatus(r, 'emergency_equipment').text.replace(/"/g, '""')}"`,
-        `"${getCheckpointPartStatus(r, 'body_passenger_doors').text.replace(/"/g, '""')}"`,
-        `"${getCheckpointPartStatus(r, 'dashboard_warnings').text.replace(/"/g, '""')}"`,
-      ];
+      const gps = r.gpsLocation?.lat && r.gpsLocation?.lng
+        ? `${r.gpsLocation.lat.toFixed(5)} ${r.gpsLocation.lng.toFixed(5)}`
+        : 'N/A';
+
+      AUDIT_CHECKPOINT_DEFS.forEach((cp) => {
+        const defects = getCheckpointDefects(r, cp.key);
+        const partStatus = getCheckpointPartStatus(r, cp.key);
+        const photoUrl = getCheckpointPhotoUrl(r, cp.key);
+
+        if (defects.length > 0) {
+          defects.forEach((def) => {
+            // Row 1: Defect Tag
+            rowNum++;
+            rows.push([
+              rowNum,
+              recordIndex + 1,
+              `"${r.id}"`,
+              `"${r.formattedDate}"`,
+              `"${r.vehicleNo}"`,
+              `"${r.truckCategory || 'Small Truck'}"`,
+              `"${r.vehicleBranch || 'BL'}"`,
+              `"${r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01')}"`,
+              `"${r.driverName}"`,
+              `"${r.driverId}"`,
+              r.odometer,
+              r.fuelLevel,
+              cp.code,
+              `"[${cp.code}] ${cp.name}"`,
+              `"Defect"`,
+              `"Defect Tag"`,
+              `"${def.tag.replace(/"/g, '""')}"`,
+              `"-"`,
+              `"${photoUrl.replace(/"/g, '""')}"`,
+              `"${gps}"`,
+              `"${isGrounded ? 'GROUNDED' : 'Ready (Good)'}"`,
+            ]);
+
+            // Row 2: Defect Remark (拆成第2行)
+            rowNum++;
+            rows.push([
+              rowNum,
+              recordIndex + 1,
+              `"${r.id}"`,
+              `"${r.formattedDate}"`,
+              `"${r.vehicleNo}"`,
+              `"${r.truckCategory || 'Small Truck'}"`,
+              `"${r.vehicleBranch || 'BL'}"`,
+              `"${r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01')}"`,
+              `"${r.driverName}"`,
+              `"${r.driverId}"`,
+              r.odometer,
+              r.fuelLevel,
+              cp.code,
+              `"[${cp.code}] ${cp.name}"`,
+              `"Defect"`,
+              `"Defect Remark"`,
+              `"-"`,
+              `"${def.remark.replace(/"/g, '""')}"`,
+              `"${photoUrl.replace(/"/g, '""')}"`,
+              `"${gps}"`,
+              `"${isGrounded ? 'GROUNDED' : 'Ready (Good)'}"`,
+            ]);
+          });
+        } else {
+          rowNum++;
+          const condition = partStatus.status === 'N/A' ? 'N/A' : 'Good';
+          rows.push([
+            rowNum,
+            recordIndex + 1,
+            `"${r.id}"`,
+            `"${r.formattedDate}"`,
+            `"${r.vehicleNo}"`,
+            `"${r.truckCategory || 'Small Truck'}"`,
+            `"${r.vehicleBranch || 'BL'}"`,
+            `"${r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01')}"`,
+            `"${r.driverName}"`,
+            `"${r.driverId}"`,
+            r.odometer,
+            r.fuelLevel,
+            cp.code,
+            `"[${cp.code}] ${cp.name}"`,
+            `"${condition}"`,
+            `"-"`,
+            `"-"`,
+            `"${condition === 'Good' ? '-' : 'N/A'}"`,
+            `"${photoUrl.replace(/"/g, '""')}"`,
+            `"${gps}"`,
+            `"${isGrounded ? 'GROUNDED' : 'Ready (Good)'}"`,
+          ]);
+        }
+      });
     });
 
     const csvContent = [
       headers.join(','),
-      ...rows.map(e => e.join(',')),
+      ...rows.map((e) => e.join(',')),
     ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `Fleet_Defect_Audit_Report_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `Fleet_Vehicle_Inspection_Audit_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1427,27 +1741,56 @@ export const InspectionHistory: React.FC = () => {
 
             {/* DEFECT ALERT BANNER (If any Fail items exist) */}
             {activeRecord.items?.some((i) => i.status === 'Fail') && (
-              <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 space-y-2">
-                <div className="flex items-center gap-2 text-rose-800 font-bold text-xs uppercase tracking-wider">
-                  <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
-                  <span>Defects Reported by Driver ({activeRecord.items.filter((i) => i.status === 'Fail').length} Items Failed)</span>
+              <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-rose-900 font-bold text-xs uppercase tracking-wider">
+                    <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>Defects Reported ({activeRecord.items.filter((i) => i.status === 'Fail').length} Checkpoints Failed)</span>
+                  </div>
+                  <span className="text-[10px] font-bold text-rose-800 bg-rose-200/80 px-2 py-0.5 rounded-full">
+                    Grounded Defect Audit
+                  </span>
                 </div>
-                <div className="space-y-1.5">
-                  {activeRecord.items
-                    .filter((i) => i.status === 'Fail')
-                    .map((def) => (
+                <div className="space-y-2">
+                  {AUDIT_CHECKPOINT_DEFS.map((cp) => {
+                    const defects = getCheckpointDefects(activeRecord, cp.key);
+                    if (defects.length === 0) return null;
+                    return (
                       <div
-                        key={def.id}
-                        className="bg-white p-2.5 rounded-xl border border-rose-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-1 shadow-2xs"
+                        key={cp.key}
+                        className="bg-white p-3 rounded-xl border border-rose-200 text-xs space-y-1.5 shadow-2xs"
                       >
-                        <span className="font-bold text-slate-800">
-                          #{def.code}. {def.title}:
-                        </span>
-                        <span className="text-rose-700 font-semibold bg-rose-50 px-2 py-0.5 rounded border border-rose-100">
-                          Remark: {def.defectNote || 'No remark provided'}
-                        </span>
+                        <div className="flex items-center justify-between border-b border-rose-100 pb-1">
+                          <span className="font-bold text-slate-900 text-xs">
+                            [{cp.code}] {cp.name}
+                          </span>
+                          <span className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded">
+                            Condition: Defect
+                          </span>
+                        </div>
+                        <div className="space-y-1 pt-0.5">
+                          {defects.map((d, dIdx) => (
+                            <div
+                              key={dIdx}
+                              className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 p-2 rounded-lg bg-rose-50/70 border border-rose-100 text-[11px]"
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <span className="w-4 h-4 rounded-full bg-rose-200 text-rose-800 text-[9px] font-mono flex items-center justify-center font-bold shrink-0">
+                                  {dIdx + 1}
+                                </span>
+                                <span className="text-slate-500 font-medium">Defect Tag:</span>
+                                <strong className="text-rose-900 font-bold">{d.tag}</strong>
+                              </div>
+                              <div className="text-slate-600 font-medium sm:text-right pl-5 sm:pl-0">
+                                <span className="text-slate-400">Remark:</span>{' '}
+                                <span className="text-slate-900 font-semibold">{d.remark}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1871,11 +2214,11 @@ export const InspectionHistory: React.FC = () => {
             {/* SECTION 5: OTHER SAFETY & MECHANICAL CHECKPOINTS */}
             {(() => {
               const otherIds = [
-                'lights_indicators',
-                'emergency_equipment',
                 'brake_system',
+                'lights_indicators',
                 'steering_handling',
                 'fluids_powertrain',
+                'emergency_equipment',
               ];
               const otherItems = activeRecord.items?.filter((i) => otherIds.includes(i.id)) || [];
               const isFeeder =
@@ -1927,9 +2270,23 @@ export const InspectionHistory: React.FC = () => {
                           });
                         });
 
-                        // Include any extra custom checks stored on the record
+                        // Special: For brake_system, check if fluids_powertrain had a recorded check for brake_fluid
+                        if (item.id === 'brake_system') {
+                          const fluidsItem = activeRecord.items?.find((i) => i.id === 'fluids_powertrain');
+                          if (fluidsItem?.systemChecks && fluidsItem.systemChecks.brake_fluid !== undefined) {
+                            const bfCheck = resolvedChecks.find((c) => c.key === 'brake_fluid');
+                            if (bfCheck && recordedChecks['brake_fluid'] === undefined) {
+                              bfCheck.checked = Boolean(fluidsItem.systemChecks.brake_fluid);
+                            }
+                          }
+                        }
+
+                        // Include any extra custom checks stored on the record (filter out brake from fluids_powertrain)
                         Object.entries(recordedChecks).forEach(([k, v]) => {
                           if (!configChecks.some((c) => c.key === k)) {
+                            if (item.id === 'fluids_powertrain' && k.toLowerCase().includes('brake')) {
+                              return;
+                            }
                             resolvedChecks.push({
                               key: k,
                               label: k.replace(/_/g, ' '),
@@ -1939,6 +2296,9 @@ export const InspectionHistory: React.FC = () => {
                         });
                       } else if (Object.keys(recordedChecks).length > 0) {
                         Object.entries(recordedChecks).forEach(([k, v]) => {
+                          if (item.id === 'fluids_powertrain' && k.toLowerCase().includes('brake')) {
+                            return;
+                          }
                           resolvedChecks.push({
                             key: k,
                             label: k.replace(/_/g, ' '),
@@ -2042,11 +2402,44 @@ export const InspectionHistory: React.FC = () => {
                             </div>
                           )}
 
-                          {item.defectNote && (
-                            <div className="text-[11px] text-rose-700 bg-rose-50 border border-rose-200 px-2 py-1 rounded font-medium">
-                              Defect Remark: {item.defectNote}
-                            </div>
-                          )}
+                          {item.defectNote && (() => {
+                            if (item.id === 'fluids_powertrain' && isBrakeKeyword(item.defectNote)) {
+                              const nonBrake = item.defectNote
+                                .split(/[;,]/)
+                                .map((s) => s.trim())
+                                .filter((s) => s.length > 0 && !isBrakeKeyword(s))
+                                .join('; ');
+                              if (!nonBrake) {
+                                return (
+                                  <div className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 px-2 py-1 rounded font-medium">
+                                    Notice: Brake remark "{item.defectNote}" relocated to Checkpoint 2 (Brake System).
+                                  </div>
+                                );
+                              }
+                              return (
+                                <div className="text-[11px] text-rose-700 bg-rose-50 border border-rose-200 px-2 py-1 rounded font-medium">
+                                  Defect Remark: {nonBrake}
+                                </div>
+                              );
+                            }
+                            return (
+                              <div className="text-[11px] text-rose-700 bg-rose-50 border border-rose-200 px-2 py-1 rounded font-medium">
+                                Defect Remark: {item.defectNote}
+                              </div>
+                            );
+                          })()}
+
+                          {!item.defectNote && item.id === 'brake_system' && (() => {
+                            const fluidsItem = activeRecord.items?.find((i) => i.id === 'fluids_powertrain');
+                            if (fluidsItem?.defectNote && isBrakeKeyword(fluidsItem.defectNote)) {
+                              return (
+                                <div className="text-[11px] text-rose-700 bg-rose-50 border border-rose-200 px-2 py-1 rounded font-medium">
+                                  Defect Remark: {fluidsItem.defectNote}
+                                </div>
+                              );
+                            }
+                            return null;
+                          })()}
                         </div>
                       );
                     })}

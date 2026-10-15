@@ -1730,7 +1730,7 @@ export function bulkImportInspections(inspectionsList: Partial<InspectionRecord>
 
   const default10Items = [
     { id: 'tires_wheels', code: 1, category: 'Chassis & Rolling Gear', title: 'Tires & Wheels', subtext: 'Tire condition & air pressure' },
-    { id: 'brake_system', code: 2, category: 'Control & Stopping', title: 'Brake System', subtext: 'Foot brake and handbrake responsiveness' },
+    { id: 'brake_system', code: 2, category: 'Control & Stopping', title: 'Brake System', subtext: 'Foot brake, handbrake, and brake fluid level' },
     { id: 'lights_indicators', code: 3, category: 'Visibility & Signals', title: 'Lights & Indicators', subtext: 'Headlights, turn signals and hazard lights' },
     { id: 'steering_handling', code: 4, category: 'Control & Stopping', title: 'Steering & Handling', subtext: 'Steering play and suspension integrity' },
     { id: 'mirrors_wipers', code: 5, category: 'Visibility & Signals', title: 'Mirrors & Wipers', subtext: 'Mirrors clarity and wiper blade function' },
@@ -1738,7 +1738,7 @@ export function bulkImportInspections(inspectionsList: Partial<InspectionRecord>
     { id: 'emergency_equipment', code: 7, category: 'Safety & Emergency', title: 'Emergency Equipment', subtext: 'Fire extinguisher, triangle and safety vest' },
     { id: 'body_passenger_doors', code: 8, category: 'Body & Access', title: 'Body & Cargo Doors', subtext: 'Cargo box doors, latches and locks' },
     { id: 'hvac_ventilation', code: 9, category: 'Cabin Environment', title: 'HVAC & Ventilation', subtext: 'Air conditioning blower and defroster' },
-    { id: 'fluids_powertrain', code: 10, category: 'Engine & Fluids', title: 'Fluids & Powertrain', subtext: 'Engine oil, coolant, and battery terminals' },
+    { id: 'fluids_powertrain', code: 10, category: 'Engine & Fluids', title: 'Fluids & Powertrain', subtext: 'Engine oil, transmission, and battery terminals' },
   ];
 
   inspectionsList.forEach(raw => {

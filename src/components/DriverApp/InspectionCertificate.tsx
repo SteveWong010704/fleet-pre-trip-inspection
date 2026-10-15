@@ -341,6 +341,11 @@ export const InspectionCertificate: React.FC<InspectionCertificateProps> = ({
                     {item.id === 'emergency_equipment' && item.status === 'Pass' && (
                       <span className="text-[10px] text-emerald-700 font-semibold block">✓ Statutory Emergency Equipment On Board</span>
                     )}
+                    {item.status === 'Fail' && (
+                      <span className="text-[10px] text-rose-700 font-semibold block truncate">
+                        ⚠ Defect: {item.defectNote || 'Fault flagged'}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
