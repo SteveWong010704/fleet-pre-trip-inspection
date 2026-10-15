@@ -1,4 +1,4 @@
-import { isSaturdayInspection } from '../types';
+import { isSaturdayInspection, requiresFull15PhotoInspection } from '../types';
 
 export interface CheckpointSlot {
   index: number;
@@ -92,16 +92,28 @@ export const SATURDAY_TIRE_SLOTS: CheckpointSlot[] = [
   { index: 4, name: 'Spare Tyre', shortLabel: 'Spare', description: 'Underbody / Mounted Spare Wheel' },
 ];
 
-export function getCheckpointRequiredPhotoCount(itemId: string, isSaturday: boolean = isSaturdayInspection()): number {
+export function getCheckpointRequiredPhotoCount(
+  itemId?: string,
+  target?: boolean | { truckCategory?: string; model?: string } | null,
+  isSaturday: boolean = isSaturdayInspection()
+): number {
+  if (!itemId) return 0;
+  const isFullSet = requiresFull15PhotoInspection(target, isSaturday);
   if (itemId === 'tires_wheels') {
-    return isSaturday ? 5 : 2;
+    return isFullSet ? 5 : 2;
   }
   return CHECKPOINT_PHOTO_CONFIG[itemId]?.minPhotos || 0;
 }
 
-export function getCheckpointSlots(itemId: string, isSaturday: boolean = isSaturdayInspection()): CheckpointSlot[] | null {
+export function getCheckpointSlots(
+  itemId?: string,
+  target?: boolean | { truckCategory?: string; model?: string } | null,
+  isSaturday: boolean = isSaturdayInspection()
+): CheckpointSlot[] | null {
+  if (!itemId) return null;
+  const isFullSet = requiresFull15PhotoInspection(target, isSaturday);
   if (itemId === 'tires_wheels') {
-    return isSaturday ? SATURDAY_TIRE_SLOTS : WEEKDAY_TIRE_SLOTS;
+    return isFullSet ? SATURDAY_TIRE_SLOTS : WEEKDAY_TIRE_SLOTS;
   }
   return CHECKPOINT_PHOTO_CONFIG[itemId]?.slots || null;
 }

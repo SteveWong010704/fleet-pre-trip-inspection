@@ -354,8 +354,19 @@
 
                   <div className="grid grid-cols-2 gap-1 text-[11px] font-mono text-slate-600 bg-slate-50 p-2 rounded-xl border border-slate-100">
                     <div>Make: <strong className="text-slate-800">{v.brand}</strong></div>
-                    <div>Type: <strong className="text-slate-800">{(v.truckCategory === 'Feeder' || String(v.model || '').toLowerCase().includes('feeder')) ? 'Feeder' : 'Small Truck'}</strong></div>
+                    <div>Type: <strong className="text-slate-800">{(v.truckCategory === 'Feeder' || String(v.model || '').toLowerCase().includes('feeder')) ? 'Feeder (15 Photos)' : 'Sales Truck (6/15 Photos)'}</strong></div>
                     <div className="col-span-2 truncate">Card: {v.cardNo?.slice(-6) || 'N/A'} • PIN {v.pinNo || '****'}</div>
+                    <div className="col-span-2 text-[10px]">
+                      {(v.truckCategory === 'Feeder' || String(v.model || '').toLowerCase().includes('feeder')) ? (
+                        <span className="inline-flex items-center text-amber-700 font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                          ⚡ Feeder: 15 Photos Required Everyday
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center text-blue-700 font-medium bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                          Mon-Fri 6 Photos • Sat 15 Photos
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between text-xs text-blue-600 font-bold pt-1">

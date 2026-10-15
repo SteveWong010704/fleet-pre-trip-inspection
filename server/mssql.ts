@@ -85,6 +85,101 @@ export async function connectMssql(): Promise<boolean> {
           IF COL_LENGTH('dbo.Drivers', 'DateCreated') IS NULL
             ALTER TABLE dbo.Drivers ADD DateCreated NVARCHAR(50) NULL;
         END
+
+        IF OBJECT_ID('dbo.Inspections', 'U') IS NOT NULL
+        BEGIN
+          IF COL_LENGTH('dbo.Inspections', 'PrimaryPhotoUrl') IS NULL
+            ALTER TABLE dbo.Inspections ADD PrimaryPhotoUrl NVARCHAR(MAX) NULL;
+          IF COL_LENGTH('dbo.Inspections', 'PhotoCount') IS NULL
+            ALTER TABLE dbo.Inspections ADD PhotoCount INT NOT NULL DEFAULT 0;
+        END
+
+        IF OBJECT_ID('dbo.InspectionPhotos', 'U') IS NULL
+        BEGIN
+          CREATE TABLE dbo.InspectionPhotos (
+            PhotoId INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+            InspectionId NVARCHAR(50) NOT NULL,
+            ItemKey NVARCHAR(100) NULL,
+            ItemTitle NVARCHAR(200) NULL,
+            SlotIndex INT NULL,
+            SlotName NVARCHAR(100) NULL,
+            PhotoUrl NVARCHAR(MAX) NOT NULL,
+            IsDefect BIT NOT NULL DEFAULT 0,
+            Caption NVARCHAR(255) NULL,
+            GpsLat DECIMAL(10, 7) NULL,
+            GpsLng DECIMAL(10, 7) NULL,
+            GpsAddress NVARCHAR(500) NULL,
+            [Timestamp] DATETIME2 NULL,
+            CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+            CONSTRAINT FK_InspectionPhotos_Inspections FOREIGN KEY (InspectionId)
+              REFERENCES dbo.Inspections (InspectionId) ON DELETE CASCADE
+          );
+        END
+        ELSE
+        BEGIN
+          IF COL_LENGTH('dbo.InspectionPhotos', 'ItemKey') IS NULL
+            ALTER TABLE dbo.InspectionPhotos ADD ItemKey NVARCHAR(100) NULL;
+          IF COL_LENGTH('dbo.InspectionPhotos', 'ItemTitle') IS NULL
+            ALTER TABLE dbo.InspectionPhotos ADD ItemTitle NVARCHAR(200) NULL;
+        END
+
+        -- Backfill existing photos from RawDataJson into InspectionPhotos
+        IF OBJECT_ID('dbo.InspectionPhotos', 'U') IS NOT NULL AND OBJECT_ID('dbo.Inspections', 'U') IS NOT NULL
+        BEGIN
+          BEGIN TRY
+            INSERT INTO dbo.InspectionPhotos (
+              InspectionId, ItemKey, ItemTitle, SlotIndex, SlotName, PhotoUrl, IsDefect, Caption, GpsLat, GpsLng, GpsAddress, [Timestamp]
+            )
+            SELECT
+              i.InspectionId,
+              p.itemId,
+              p.itemTitle,
+              p.slotIndex,
+              p.slotName,
+              p.url,
+              ISNULL(p.isDefect, 0),
+              p.caption,
+              p.gpsLat,
+              p.gpsLng,
+              p.gpsAddress,
+              TRY_CAST(p.photoTimestamp AS DATETIME2)
+            FROM dbo.Inspections i
+            CROSS APPLY OPENJSON(i.RawDataJson, '$.photos')
+            WITH (
+              url NVARCHAR(MAX) '$.url',
+              itemId NVARCHAR(100) '$.itemId',
+              itemTitle NVARCHAR(200) '$.itemTitle',
+              slotIndex INT '$.slotIndex',
+              slotName NVARCHAR(100) '$.slotName',
+              isDefect BIT '$.isDefect',
+              caption NVARCHAR(255) '$.caption',
+              photoTimestamp NVARCHAR(50) '$.timestamp',
+              gpsLat DECIMAL(10,7) '$.gps.lat',
+              gpsLng DECIMAL(10,7) '$.gps.lng',
+              gpsAddress NVARCHAR(500) '$.gps.address'
+            ) AS p
+            WHERE p.url IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM dbo.InspectionPhotos ip
+                WHERE ip.InspectionId = i.InspectionId AND ip.PhotoUrl = p.url
+              );
+
+            -- Update PrimaryPhotoUrl & PhotoCount on dbo.Inspections
+            UPDATE i
+            SET i.PrimaryPhotoUrl = COALESCE(
+              (SELECT TOP 1 ip.PhotoUrl FROM dbo.InspectionPhotos ip WHERE ip.InspectionId = i.InspectionId ORDER BY ip.PhotoId ASC),
+              JSON_VALUE(i.RawDataJson, '$.photos[0].url')
+            ),
+            i.PhotoCount = (
+              SELECT COUNT(1) FROM dbo.InspectionPhotos ip WHERE ip.InspectionId = i.InspectionId
+            )
+            FROM dbo.Inspections i
+            WHERE i.PrimaryPhotoUrl IS NULL;
+          END TRY
+          BEGIN CATCH
+            -- Ignore JSON parsing if running on SQL Server engine with non-standard JSON config
+          END CATCH
+        END
       `;
     } catch (migErr) {
       console.warn('[MSSQL Migration Warning] Non-critical schema migration check:', migErr);
@@ -462,6 +557,8 @@ export async function dbLoadInspections(): Promise<InspectionRecord[]> {
         OverallResult AS overallResult,
         DefectCount AS defectCount,
         DefectSummary AS defectSummary,
+        PrimaryPhotoUrl AS primaryPhotoUrl,
+        PhotoCount AS photoCount,
         RawDataJson AS rawDataJson
       FROM dbo.Inspections
       ORDER BY [Timestamp] DESC
@@ -472,6 +569,8 @@ export async function dbLoadInspections(): Promise<InspectionRecord[]> {
       if (row.rawDataJson) {
         try {
           const parsed = JSON.parse(row.rawDataJson);
+          parsed.primaryPhotoUrl = row.primaryPhotoUrl || parsed.primaryPhotoUrl || parsed.photos?.[0]?.url || '';
+          parsed.photoCount = row.photoCount || parsed.photoCount || (Array.isArray(parsed.photos) ? parsed.photos.length : 0);
           records.push(parsed);
           continue;
         } catch {
@@ -498,6 +597,8 @@ export async function dbLoadInspections(): Promise<InspectionRecord[]> {
         overallResult: row.overallResult,
         defectCount: row.defectCount,
         defectSummary: row.defectSummary,
+        primaryPhotoUrl: row.primaryPhotoUrl || '',
+        photoCount: row.photoCount || 0,
         items: [],
         photos: [],
       });
@@ -607,6 +708,11 @@ export async function dbSaveInspection(record: InspectionRecord): Promise<void> 
     req.input('DriverDeclFit', sql.Bit, decl.fitAndRested !== false ? 1 : 0);
     req.input('DriverDeclSubstanceFree', sql.Bit, decl.substanceFree !== false ? 1 : 0);
     req.input('DriverDeclScheduleRest', sql.Bit, decl.scheduleAndRestAcknowledged !== false ? 1 : 0);
+    const effectivePrimaryPhoto = record.primaryPhotoUrl || record.photos?.[0]?.url || (Array.isArray(record.items) ? record.items.find(i => i.photoUrl)?.photoUrl : null) || null;
+    const effectivePhotoCount = record.photoCount ?? (Array.isArray(record.photos) ? record.photos.length : 0);
+
+    req.input('PrimaryPhotoUrl', sql.NVarChar(sql.MAX), effectivePrimaryPhoto);
+    req.input('PhotoCount', sql.Int, effectivePhotoCount);
     req.input('DriverDeclCargoSafe', sql.Bit, decl.cargoSafeBDM !== false ? 1 : 0);
     req.input('SignatureData', sql.NVarChar(sql.MAX), record.signature || null);
     req.input('RawDataJson', sql.NVarChar(sql.MAX), JSON.stringify(record));
@@ -623,6 +729,7 @@ export async function dbSaveInspection(record: InspectionRecord): Promise<void> 
           VehicleBranch = @VehicleBranch, TruckCategory = @TruckCategory, [Route] = @Route,
           Odometer = @Odometer, FuelLevel = @FuelLevel, HealthDeclaration = @HealthDeclaration,
           OverallResult = @OverallResult, DefectCount = @DefectCount, DefectSummary = @DefectSummary,
+          PrimaryPhotoUrl = @PrimaryPhotoUrl, PhotoCount = @PhotoCount,
           GpsLat = @GpsLat, GpsLng = @GpsLng, GpsAccuracy = @GpsAccuracy, GpsAddress = @GpsAddress,
           DriverDeclUniform = @DriverDeclUniform, DriverDeclFit = @DriverDeclFit,
           DriverDeclSubstanceFree = @DriverDeclSubstanceFree, DriverDeclScheduleRest = @DriverDeclScheduleRest,
@@ -631,13 +738,13 @@ export async function dbSaveInspection(record: InspectionRecord): Promise<void> 
         INSERT (InspectionId, [Timestamp], FormattedDate, DriverId, DriverName, DriverDesignation,
                 DriverDepot, VehicleNo, VehicleBrand, VehicleModel, VehicleBranch, TruckCategory,
                 [Route], Odometer, FuelLevel, HealthDeclaration, OverallResult, DefectCount,
-                DefectSummary, GpsLat, GpsLng, GpsAccuracy, GpsAddress, DriverDeclUniform,
+                DefectSummary, PrimaryPhotoUrl, PhotoCount, GpsLat, GpsLng, GpsAccuracy, GpsAddress, DriverDeclUniform,
                 DriverDeclFit, DriverDeclSubstanceFree, DriverDeclScheduleRest, DriverDeclCargoSafe,
                 SignatureData, RawDataJson)
         VALUES (@InspectionId, @Timestamp, @FormattedDate, @DriverId, @DriverName, @DriverDesignation,
                 @DriverDepot, @VehicleNo, @VehicleBrand, @VehicleModel, @VehicleBranch, @TruckCategory,
                 @Route, @Odometer, @FuelLevel, @HealthDeclaration, @OverallResult, @DefectCount,
-                @DefectSummary, @GpsLat, @GpsLng, @GpsAccuracy, @GpsAddress, @DriverDeclUniform,
+                @DefectSummary, @PrimaryPhotoUrl, @PhotoCount, @GpsLat, @GpsLng, @GpsAccuracy, @GpsAddress, @DriverDeclUniform,
                 @DriverDeclFit, @DriverDeclSubstanceFree, @DriverDeclScheduleRest, @DriverDeclCargoSafe,
                 @SignatureData, @RawDataJson);
     `;
@@ -664,6 +771,84 @@ export async function dbSaveInspection(record: InspectionRecord): Promise<void> 
         await itemReq.query`
           INSERT INTO dbo.InspectionItems (InspectionId, ItemKey, Code, Category, Title, Subtext, [Status], DefectNote, PhotoUrl, SystemChecksJson)
           VALUES (@InspectionId, @ItemKey, @Code, @Category, @Title, @Subtext, @Status, @DefectNote, @PhotoUrl, @SystemChecksJson)
+        `;
+      }
+    }
+
+    // Also populate normalized child table: InspectionPhotos (Foreign Key -> Inspections.InspectionId)
+    const allPhotos: {
+      url: string;
+      itemId?: string;
+      itemTitle?: string;
+      slotIndex?: number;
+      slotName?: string;
+      isDefect?: boolean;
+      caption?: string;
+      lat?: number;
+      lng?: number;
+      address?: string;
+      timestamp?: string;
+    }[] = [];
+
+    if (Array.isArray(record.photos)) {
+      for (const p of record.photos) {
+        if (p?.url) {
+          allPhotos.push({
+            url: p.url,
+            itemId: p.itemId,
+            itemTitle: p.itemTitle,
+            slotIndex: p.slotIndex,
+            slotName: p.slotName,
+            isDefect: p.isDefect,
+            caption: p.caption,
+            lat: p.gps?.lat,
+            lng: p.gps?.lng,
+            address: p.gps?.address,
+            timestamp: p.timestamp,
+          });
+        }
+      }
+    }
+
+    if (Array.isArray(record.items)) {
+      for (const it of record.items) {
+        if (it?.photoUrl && !allPhotos.some(p => p.url === it.photoUrl)) {
+          allPhotos.push({
+            url: it.photoUrl,
+            itemId: it.id,
+            itemTitle: it.title,
+            isDefect: it.status === 'Fail',
+            caption: it.defectNote || it.title,
+          });
+        }
+      }
+    }
+
+    if (allPhotos.length > 0) {
+      await pool.request().input('InspId', sql.NVarChar(50), record.id)
+        .query`DELETE FROM dbo.InspectionPhotos WHERE InspectionId = @InspId`;
+
+      for (const ph of allPhotos) {
+        const photoReq = pool.request();
+        photoReq.input('InspectionId', sql.NVarChar(50), record.id);
+        photoReq.input('ItemKey', sql.NVarChar(100), ph.itemId || null);
+        photoReq.input('ItemTitle', sql.NVarChar(200), ph.itemTitle || null);
+        photoReq.input('SlotIndex', sql.Int, ph.slotIndex ?? null);
+        photoReq.input('SlotName', sql.NVarChar(100), ph.slotName || null);
+        photoReq.input('PhotoUrl', sql.NVarChar(sql.MAX), ph.url);
+        photoReq.input('IsDefect', sql.Bit, ph.isDefect ? 1 : 0);
+        photoReq.input('Caption', sql.NVarChar(255), ph.caption || null);
+        photoReq.input('GpsLat', sql.Decimal(10, 7), ph.lat || null);
+        photoReq.input('GpsLng', sql.Decimal(10, 7), ph.lng || null);
+        photoReq.input('GpsAddress', sql.NVarChar(500), ph.address || null);
+        photoReq.input('Timestamp', sql.DateTime2, ph.timestamp ? new Date(ph.timestamp) : null);
+
+        await photoReq.query`
+          INSERT INTO dbo.InspectionPhotos (
+            InspectionId, ItemKey, ItemTitle, SlotIndex, SlotName, PhotoUrl, IsDefect, Caption, GpsLat, GpsLng, GpsAddress, [Timestamp]
+          ) VALUES (
+            @InspectionId, @ItemKey, @ItemTitle, @SlotIndex, @SlotName, @PhotoUrl, @IsDefect, @Caption, @GpsLat, @GpsLng, @GpsAddress, @Timestamp
+          )
         `;
       }
     }

@@ -417,28 +417,4 @@ export const CHECKPOINT_EXAMPLES: Record<string, ExamplePhotoGuide> = {
       },
     },
   },
-  lights_indicators: {
-    id: 'lights_indicators',
-    title: 'Vehicle Lighting & Signals',
-    description: 'Turn on headlights and hazard flashers.',
-    exampleImageSvg: lightsSvg,
-    fileName: 'headlights_illuminated.jpg',
-    realPhotoPath: '/sample-photos/headlights_illuminated.jpg',
-    instructions: [
-      'Turn lights & hazard signals ON',
-      'Bright lamps & clear lenses',
-    ],
-  },
-  emergency_equipment: {
-    id: 'emergency_equipment',
-    title: 'Fire Extinguisher & Safety Kit',
-    description: 'Check extinguisher gauge, triangle, kit.',
-    exampleImageSvg: emergencySvg,
-    fileName: 'fire_extinguisher_kit.jpg',
-    realPhotoPath: '/sample-photos/fire_extinguisher_kit.jpg',
-    instructions: [
-      '⚡ Turn ON flashlight on gauge',
-      'Needle in GREEN zone with pin',
-    ],
-  },
 };

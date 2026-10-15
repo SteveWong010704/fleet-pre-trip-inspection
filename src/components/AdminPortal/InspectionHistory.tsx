@@ -289,31 +289,102 @@ export const InspectionHistory: React.FC = () => {
     await loadInspections();
   };
 
-  // Export to Excel (.xlsx)
+  // Checkpoint definitions for itemized Defect Audit Matrix extraction
+  const AUDIT_CHECKPOINT_DEFS = [
+    { key: 'tires_wheels', code: 1, name: 'Tires & Wheels' },
+    { key: 'brake_system', code: 2, name: 'Brake System' },
+    { key: 'lights_indicators', code: 3, name: 'Lights & Indicators' },
+    { key: 'steering_handling', code: 4, name: 'Steering & Handling' },
+    { key: 'radiator_coolant', code: 5, name: 'Radiator & Coolant' },
+    { key: 'fluids_powertrain', code: 6, name: 'Engine Oil & Powertrain' },
+    { key: 'diesel_fuel_cap', code: 7, name: 'Diesel Fuel Cap & Tank' },
+    { key: 'emergency_equipment', code: 8, name: 'Emergency Equipment (APAD)' },
+    { key: 'body_passenger_doors', code: 9, name: 'Cargo & Body' },
+    { key: 'dashboard_warnings', code: 10, name: 'Dashboard & Meter' },
+  ];
+
+  const getCheckpointPartStatus = (record: InspectionRecord, checkpointKey: string): { status: 'Good' | 'Grounded' | 'N/A'; note?: string; text: string } => {
+    const item = Array.isArray(record.items)
+      ? record.items.find(i => i.id === checkpointKey || i.code === AUDIT_CHECKPOINT_DEFS.find(d => d.key === checkpointKey)?.code)
+      : undefined;
+
+    if (!item) {
+      return { status: 'Good', text: 'Good (Routine Pass)' };
+    }
+
+    if (item.status === 'Fail') {
+      const note = (item.defectNote || 'Defect reported').trim();
+      return {
+        status: 'Grounded',
+        note,
+        text: `GROUNDED: ${note}`,
+      };
+    }
+
+    if (item.status === 'NA') {
+      return { status: 'N/A', text: 'N/A' };
+    }
+
+    return { status: 'Good', text: 'Good' };
+  };
+
+  const getGroundedDefectPartsSummary = (record: InspectionRecord): string => {
+    const grounded: string[] = [];
+    for (const cp of AUDIT_CHECKPOINT_DEFS) {
+      const res = getCheckpointPartStatus(record, cp.key);
+      if (res.status === 'Grounded') {
+        grounded.push(`${cp.name}${res.note ? ` (${res.note})` : ''}`);
+      }
+    }
+    return grounded.length > 0 ? grounded.join('; ') : 'None (All Systems Good)';
+  };
+
+  // Export to Excel (.xlsx) with full defect parts breakdown (Good / Grounded) & Photo URLs
   const handleExportExcel = () => {
     if (filteredInspections.length === 0) {
       alert('No inspection records to export with the selected filters.');
       return;
     }
 
-    const dataRows = filteredInspections.map((r, index) => ({
-      'No.': index + 1,
-      'Certificate ID': r.id,
-      'Date & Time': r.formattedDate,
-      'Vehicle Plate': r.vehicleNo,
-      'Brand & Model': `${r.vehicleBrand || ''} ${r.vehicleModel || ''}`.trim(),
-      'Branch / Depot': r.vehicleBranch || 'BL',
-      'Route / Area': r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01'),
-      'Driver ID': r.driverId,
-      'Driver Name': r.driverName,
-      'Odometer (KM)': r.odometer,
-      'Fuel Level (%)': `${r.fuelLevel}%`,
-      'Overall Result': r.overallResult,
-      'Defect Count': r.defectCount,
-      'Defect Summary': r.defectSummary || (r.overallResult === 'Pass' ? 'None (10/10 Passed)' : 'Defects Reported'),
-      'GPS Latitude': r.gpsLocation?.lat || 'N/A',
-      'GPS Longitude': r.gpsLocation?.lng || 'N/A',
-    }));
+    const dataRows = filteredInspections.map((r, index) => {
+      const primaryPhoto = r.primaryPhotoUrl || r.photos?.[0]?.url || (Array.isArray(r.items) ? r.items.find(i => i.photoUrl)?.photoUrl : '') || 'N/A';
+      const groundedSummary = getGroundedDefectPartsSummary(r);
+      const isGrounded = r.overallResult === 'Fail';
+
+      return {
+        'No.': index + 1,
+        'Certificate ID': r.id,
+        'Date & Time': r.formattedDate,
+        'Vehicle Plate': r.vehicleNo,
+        'Brand & Model': `${r.vehicleBrand || ''} ${r.vehicleModel || ''}`.trim(),
+        'Category': r.truckCategory || 'Feeder',
+        'Branch / Depot': r.vehicleBranch || 'BL',
+        'Route / Area': r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01'),
+        'Driver ID': r.driverId,
+        'Driver Name': r.driverName,
+        'Odometer (KM)': r.odometer,
+        'Fuel Level (%)': `${r.fuelLevel}%`,
+        'Vehicle Status': isGrounded ? 'GROUNDED' : 'Ready (Good)',
+        'Overall Result': r.overallResult,
+        'Defect Count': r.defectCount,
+        'Grounded Parts List': groundedSummary,
+        'Defect Summary': r.defectSummary || (r.overallResult === 'Pass' ? 'None (All 10 Pass)' : 'Defects Reported'),
+        'Inspection Photo URL': primaryPhoto,
+        'Photos Captured': r.photoCount || r.photos?.length || 0,
+        '[1] Tires & Wheels': getCheckpointPartStatus(r, 'tires_wheels').text,
+        '[2] Brake System': getCheckpointPartStatus(r, 'brake_system').text,
+        '[3] Lights & Indicators': getCheckpointPartStatus(r, 'lights_indicators').text,
+        '[4] Steering & Handling': getCheckpointPartStatus(r, 'steering_handling').text,
+        '[5] Radiator & Coolant': getCheckpointPartStatus(r, 'radiator_coolant').text,
+        '[6] Engine Oil & Powertrain': getCheckpointPartStatus(r, 'fluids_powertrain').text,
+        '[7] Diesel Fuel Cap & Tank': getCheckpointPartStatus(r, 'diesel_fuel_cap').text,
+        '[8] Emergency Equipment (APAD)': getCheckpointPartStatus(r, 'emergency_equipment').text,
+        '[9] Cargo & Body': getCheckpointPartStatus(r, 'body_passenger_doors').text,
+        '[10] Dashboard & Meter': getCheckpointPartStatus(r, 'dashboard_warnings').text,
+        'GPS Latitude': r.gpsLocation?.lat || 'N/A',
+        'GPS Longitude': r.gpsLocation?.lng || 'N/A',
+      };
+    });
 
     const worksheet = XLSX.utils.json_to_sheet(dataRows);
     
@@ -324,15 +395,30 @@ export const InspectionHistory: React.FC = () => {
       { wch: 20 },
       { wch: 14 },
       { wch: 22 },
-      { wch: 15 },
-      { wch: 22 },
       { wch: 12 },
-      { wch: 26 },
+      { wch: 15 },
+      { wch: 15 },
+      { wch: 12 },
+      { wch: 24 },
       { wch: 14 },
       { wch: 14 },
+      { wch: 16 },
       { wch: 14 },
       { wch: 14 },
       { wch: 35 },
+      { wch: 35 },
+      { wch: 35 },
+      { wch: 15 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 22 },
       { wch: 14 },
       { wch: 14 },
     ];
@@ -341,11 +427,45 @@ export const InspectionHistory: React.FC = () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Inspection Audit Logs');
 
+    // Also include Grounded Units Hitlist sheet if any vehicles are grounded
+    const groundedOnlyRows = filteredInspections
+      .filter(r => r.overallResult === 'Fail' || r.defectCount > 0)
+      .map((r, index) => {
+        const primaryPhoto = r.primaryPhotoUrl || r.photos?.[0]?.url || (Array.isArray(r.items) ? r.items.find(i => i.photoUrl)?.photoUrl : '') || 'N/A';
+        return {
+          'No.': index + 1,
+          'Plate Number': r.vehicleNo,
+          'Type': r.truckCategory || 'Feeder',
+          'Branch': r.vehicleBranch || 'BL',
+          'Driver': `${r.driverName} (${r.driverId})`,
+          'Date & Time': r.formattedDate,
+          'Defect Count': r.defectCount,
+          'Grounded Defect Summary': r.defectSummary || 'Safety faults flagged',
+          'Failed Components': getGroundedDefectPartsSummary(r),
+          'Inspection Photo Evidence': primaryPhoto,
+          'Tires Defect': getCheckpointPartStatus(r, 'tires_wheels').status === 'Grounded' ? getCheckpointPartStatus(r, 'tires_wheels').text : 'Good',
+          'Brake Defect': getCheckpointPartStatus(r, 'brake_system').status === 'Grounded' ? getCheckpointPartStatus(r, 'brake_system').text : 'Good',
+          'Lights Defect': getCheckpointPartStatus(r, 'lights_indicators').status === 'Grounded' ? getCheckpointPartStatus(r, 'lights_indicators').text : 'Good',
+          'Steering Defect': getCheckpointPartStatus(r, 'steering_handling').status === 'Grounded' ? getCheckpointPartStatus(r, 'steering_handling').text : 'Good',
+          'Coolant Defect': getCheckpointPartStatus(r, 'radiator_coolant').status === 'Grounded' ? getCheckpointPartStatus(r, 'radiator_coolant').text : 'Good',
+          'Oil Defect': getCheckpointPartStatus(r, 'fluids_powertrain').status === 'Grounded' ? getCheckpointPartStatus(r, 'fluids_powertrain').text : 'Good',
+          'Fuel Cap Defect': getCheckpointPartStatus(r, 'diesel_fuel_cap').status === 'Grounded' ? getCheckpointPartStatus(r, 'diesel_fuel_cap').text : 'Good',
+          'APAD Safety Defect': getCheckpointPartStatus(r, 'emergency_equipment').status === 'Grounded' ? getCheckpointPartStatus(r, 'emergency_equipment').text : 'Good',
+          'Body Defect': getCheckpointPartStatus(r, 'body_passenger_doors').status === 'Grounded' ? getCheckpointPartStatus(r, 'body_passenger_doors').text : 'Good',
+          'Meter Defect': getCheckpointPartStatus(r, 'dashboard_warnings').status === 'Grounded' ? getCheckpointPartStatus(r, 'dashboard_warnings').text : 'Good',
+        };
+      });
+
+    if (groundedOnlyRows.length > 0) {
+      const wsGrounded = XLSX.utils.json_to_sheet(groundedOnlyRows);
+      XLSX.utils.book_append_sheet(workbook, wsGrounded, 'Grounded Units Hitlist');
+    }
+
     const timestamp = new Date().toISOString().slice(0, 10);
     XLSX.writeFile(workbook, `Fleet_Inspection_Report_${timestamp}.xlsx`);
   };
 
-  // Export to CSV
+  // Export to CSV with full defect parts breakdown (Good / Grounded)
   const handleExportCSV = () => {
     if (filteredInspections.length === 0) {
       alert('No inspection records to export with the selected filters.');
@@ -358,33 +478,65 @@ export const InspectionHistory: React.FC = () => {
       'Date & Time',
       'Vehicle Plate',
       'Brand & Model',
+      'Category',
       'Branch',
       'Route / Area',
       'Driver ID',
       'Driver Name',
       'Odometer KM',
       'Fuel Level %',
-      'Result',
+      'Vehicle Status',
+      'Overall Result',
       'Defects',
+      'Grounded Parts List',
       'Defect Details',
+      'Inspection Photo URL',
+      'Tires Wheels',
+      'Brake System',
+      'Lights Indicators',
+      'Steering Handling',
+      'Radiator Coolant',
+      'Engine Oil Powertrain',
+      'Diesel Fuel Cap',
+      'Emergency Equipment',
+      'Cargo Body',
+      'Dashboard Meter',
     ];
 
-    const rows = filteredInspections.map((r, idx) => [
-      idx + 1,
-      `"${r.id}"`,
-      `"${r.formattedDate}"`,
-      `"${r.vehicleNo}"`,
-      `"${(r.vehicleBrand || '') + ' ' + (r.vehicleModel || '')}"`,
-      `"${r.vehicleBranch || 'BL'}"`,
-      `"${r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01')}"`,
-      `"${r.driverId}"`,
-      `"${r.driverName}"`,
-      r.odometer,
-      r.fuelLevel,
-      `"${r.overallResult}"`,
-      r.defectCount,
-      `"${(r.defectSummary || '').replace(/"/g, '""')}"`,
-    ]);
+    const rows = filteredInspections.map((r, idx) => {
+      const isGrounded = r.overallResult === 'Fail';
+      const primaryPhoto = r.primaryPhotoUrl || r.photos?.[0]?.url || (Array.isArray(r.items) ? r.items.find(i => i.photoUrl)?.photoUrl : '') || 'N/A';
+      return [
+        idx + 1,
+        `"${r.id}"`,
+        `"${r.formattedDate}"`,
+        `"${r.vehicleNo}"`,
+        `"${(r.vehicleBrand || '') + ' ' + (r.vehicleModel || '')}"`,
+        `"${r.truckCategory || 'Feeder'}"`,
+        `"${r.vehicleBranch || 'BL'}"`,
+        `"${r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01')}"`,
+        `"${r.driverId}"`,
+        `"${r.driverName}"`,
+        r.odometer,
+        r.fuelLevel,
+        `"${isGrounded ? 'GROUNDED' : 'Ready (Good)'}"`,
+        `"${r.overallResult}"`,
+        r.defectCount,
+        `"${getGroundedDefectPartsSummary(r).replace(/"/g, '""')}"`,
+        `"${(r.defectSummary || '').replace(/"/g, '""')}"`,
+        `"${primaryPhoto.replace(/"/g, '""')}"`,
+        `"${getCheckpointPartStatus(r, 'tires_wheels').text.replace(/"/g, '""')}"`,
+        `"${getCheckpointPartStatus(r, 'brake_system').text.replace(/"/g, '""')}"`,
+        `"${getCheckpointPartStatus(r, 'lights_indicators').text.replace(/"/g, '""')}"`,
+        `"${getCheckpointPartStatus(r, 'steering_handling').text.replace(/"/g, '""')}"`,
+        `"${getCheckpointPartStatus(r, 'radiator_coolant').text.replace(/"/g, '""')}"`,
+        `"${getCheckpointPartStatus(r, 'fluids_powertrain').text.replace(/"/g, '""')}"`,
+        `"${getCheckpointPartStatus(r, 'diesel_fuel_cap').text.replace(/"/g, '""')}"`,
+        `"${getCheckpointPartStatus(r, 'emergency_equipment').text.replace(/"/g, '""')}"`,
+        `"${getCheckpointPartStatus(r, 'body_passenger_doors').text.replace(/"/g, '""')}"`,
+        `"${getCheckpointPartStatus(r, 'dashboard_warnings').text.replace(/"/g, '""')}"`,
+      ];
+    });
 
     const csvContent = [
       headers.join(','),
@@ -395,7 +547,7 @@ export const InspectionHistory: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `Fleet_Inspection_Audit_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `Fleet_Defect_Audit_Report_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1079,11 +1231,20 @@ export const InspectionHistory: React.FC = () => {
                       </td>
                       <td className="px-3.5 py-3">
                         {r.defectCount > 0 ? (
-                          <span className="text-rose-600 font-semibold text-xs">
-                            {r.defectCount} Defect(s)
-                          </span>
+                          <div className="space-y-1">
+                            <span className="inline-flex items-center gap-1 text-rose-700 font-bold text-xs bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                              <AlertTriangle className="w-3 h-3 text-rose-600" />
+                              <span>{r.defectCount} Grounded Part(s)</span>
+                            </span>
+                            <div className="text-[10px] text-slate-500 font-medium max-w-[200px] truncate" title={getGroundedDefectPartsSummary(r)}>
+                              {getGroundedDefectPartsSummary(r)}
+                            </div>
+                          </div>
                         ) : (
-                          <span className="text-emerald-600 text-xs font-semibold">10/10 All Pass</span>
+                          <span className="inline-flex items-center gap-1 text-emerald-700 font-bold text-[11px] bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            <span>All Parts Good</span>
+                          </span>
                         )}
                       </td>
                       <td className="px-3.5 py-3 text-right">
