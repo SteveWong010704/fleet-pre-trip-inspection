@@ -14,11 +14,13 @@ import { BulkManager } from './components/AdminPortal/BulkManager';
 import { QrCodeGenerator } from './components/AdminPortal/QrCodeGenerator';
 import { AuditLogViewer } from './components/AdminPortal/AuditLogViewer';
 import { BackupRetentionManager } from './components/AdminPortal/BackupRetentionManager';
+import { ExecutiveDashboard } from './components/AdminPortal/ExecutiveDashboard';
+import { OperationsManager } from './components/AdminPortal/OperationsManager';
 import { fetchVehicleByPlate, checkDriverDailyInspection, checkVehicleDailyInspection, clearAuthToken } from './lib/api';
 import { syncPublicBaseUrlFromServer } from './lib/publicUrl';
 import { getCheckpointRequiredPhotoCount } from './lib/checkpointConfig';
 import { getDefaultSystemChecks } from './lib/quickChecklistConfig';
-import { Smartphone, LayoutDashboard, Truck, ClipboardList, Send, FileCheck, ArrowLeft, ArrowRight, ShieldCheck, Users, AlertTriangle, HardDrive } from 'lucide-react';
+import { Smartphone, LayoutDashboard, Truck, ClipboardList, Send, FileCheck, ArrowLeft, ArrowRight, ShieldCheck, Users, AlertTriangle, HardDrive, TrendingUp, Route } from 'lucide-react';
 
 export default function App() {
   // Check if opened from a Driver QR code scan (?plate=XXX or ?view=driver or ?certId=XXX)
@@ -32,7 +34,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'driver' | 'admin'>(() => {
     return isDriverQrScan() ? 'driver' : 'admin';
   });
-  const [adminTab, setAdminTab] = useState<'fleet' | 'drivers' | 'history' | 'bulk' | 'qr' | 'logs' | 'backup'>('fleet');
+  const [adminTab, setAdminTab] = useState<'analytics' | 'fleet' | 'drivers' | 'operations' | 'history' | 'bulk' | 'qr' | 'logs' | 'backup'>('analytics');
 
   // Admin Auth State (session persisted so refresh on 192.168.1.80 maintains admin session)
   const [activeAdmin, setActiveAdmin] = useState<AdminUser | null>(() => {
@@ -404,6 +406,16 @@ export default function App() {
                 {/* Admin Sub-Tabs */}
                 <div className="flex flex-wrap items-center gap-2 p-1.5 bg-white border border-slate-200 rounded-2xl shadow-sm no-print">
                   <button
+                    onClick={() => setAdminTab('analytics')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                      adminTab === 'analytics' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    <TrendingUp className="w-4 h-4" />
+                    <span>Executive Analytics</span>
+                  </button>
+
+                  <button
                     onClick={() => setAdminTab('fleet')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'fleet' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -421,6 +433,16 @@ export default function App() {
                   >
                     <Users className="w-4 h-4" />
                     <span>Drivers & Accounts</span>
+                  </button>
+
+                  <button
+                    onClick={() => setAdminTab('operations')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                      adminTab === 'operations' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    <Route className="w-4 h-4" />
+                    <span>Manage Route, Depo, Region</span>
                   </button>
 
                   <button
@@ -475,8 +497,10 @@ export default function App() {
                 </div>
 
                 {/* Sub-Tab View Rendering */}
+                {adminTab === 'analytics' && <ExecutiveDashboard />}
                 {adminTab === 'fleet' && <FleetOverview />}
                 {adminTab === 'drivers' && <DriverManagement />}
+                {adminTab === 'operations' && <OperationsManager />}
                 {adminTab === 'history' && <InspectionHistory />}
                 {adminTab === 'bulk' && <BulkManager />}
                 {adminTab === 'qr' && <QrCodeGenerator />}

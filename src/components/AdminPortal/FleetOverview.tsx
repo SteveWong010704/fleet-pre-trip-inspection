@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Vehicle, FleetStats } from '../../types';
-import { fetchVehicles, fetchStats, updateVehicleStatus, updateVehicle, createVehicle, deleteVehicle, regenerateVehicleQrToken } from '../../lib/api';
+import { Vehicle, FleetStats, DepotItem, RouteItem } from '../../types';
+import { fetchVehicles, fetchStats, updateVehicleStatus, updateVehicle, createVehicle, deleteVehicle, regenerateVehicleQrToken, fetchDepots, fetchRoutes } from '../../lib/api';
 import { exportVehiclesToCsv } from '../../lib/csvParser';
 import { buildVehicleDeepLink, getPublicBaseUrl } from '../../lib/publicUrl';
 import {
@@ -39,6 +39,8 @@ export const FleetOverview: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [masterDepots, setMasterDepots] = useState<DepotItem[]>([]);
+  const [masterRoutes, setMasterRoutes] = useState<RouteItem[]>([]);
 
   // Filters for Real-time Completion Rate & Fleet
   const [selectedBranch, setSelectedBranch] = useState<string>('ALL');
@@ -117,7 +119,7 @@ export const FleetOverview: React.FC = () => {
     else setIsRefreshing(true);
 
     try {
-      const [vList, sData] = await Promise.all([
+      const [vList, sData, mDeps, mRts] = await Promise.all([
         fetchVehicles({
           branch: selectedBranch,
           status: selectedStatus,
@@ -128,9 +130,13 @@ export const FleetOverview: React.FC = () => {
           date: selectedDate,
           truckCategory: selectedCategory,
         }),
+        fetchDepots().catch(() => [] as DepotItem[]),
+        fetchRoutes().catch(() => [] as RouteItem[]),
       ]);
       setVehicles(vList);
       setStats(sData);
+      if (mDeps && mDeps.length > 0) setMasterDepots(mDeps);
+      if (mRts && mRts.length > 0) setMasterRoutes(mRts);
       setLastUpdated(new Date());
     } catch (err) {
       console.error('Failed to fetch real-time fleet data:', err);
@@ -266,8 +272,13 @@ export const FleetOverview: React.FC = () => {
     link.click();
   };
 
-  // Available Filter Options
-  const depots = Array.from(new Set(vehicles.map(v => v.branch))).filter(Boolean).sort();
+  // Available Filter Options (combining master depots with registered vehicle branches)
+  const depots = useMemo(() => {
+    const list = new Set<string>();
+    masterDepots.forEach(d => list.add(d.code));
+    vehicles.forEach(v => { if (v.branch) list.add(v.branch.toUpperCase()); });
+    return Array.from(list).filter(Boolean).sort();
+  }, [masterDepots, vehicles]);
   
   // Window Pagination State
   const [pageSize, setPageSize] = useState<number>(15);
@@ -899,28 +910,42 @@ export const FleetOverview: React.FC = () => {
                   <input
                     type="text"
                     required
+                    list="master-depot-options"
                     value={vehicleForm.branch || ''}
                     onChange={(e) => setVehicleForm({ ...vehicleForm, branch: e.target.value.toUpperCase() })}
-                    placeholder="e.g. KL, BL, KJ, GB"
+                    placeholder="Select or enter depot code (e.g. GB, PG, KJ, NL, MN, SB)"
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
+                  <datalist id="master-depot-options">
+                    {depots.map(d => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </datalist>
                 </div>
 
                 {/* Area / Route */}
                 <div className="space-y-1">
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Assigned Route / Area (e.g. BL01, KL01)
+                    Assigned Route / Area (e.g. BL01, KJ01)
                   </label>
                   <input
                     type="text"
+                    list="master-route-options"
                     value={vehicleForm.area || ''}
                     onChange={(e) => {
                       const val = e.target.value.toUpperCase();
                       setVehicleForm({ ...vehicleForm, area: val, assignedRoute: val });
                     }}
-                    placeholder="e.g. BL01, BL02, KL01"
+                    placeholder="Select or enter route code (e.g. BL01, KJ01, GB01)"
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
+                  <datalist id="master-route-options">
+                    {masterRoutes
+                      .filter(r => !vehicleForm.branch || r.depotId === vehicleForm.branch)
+                      .map(r => (
+                        <option key={r.code} value={r.code}>{r.code} ({r.depotId})</option>
+                      ))}
+                  </datalist>
                 </div>
 
                 {/* Vehicle Category */}

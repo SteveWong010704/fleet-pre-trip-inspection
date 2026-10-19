@@ -46,6 +46,8 @@ import {
   updateSettings,
   pruneOldInspections,
   getDatabaseStatus,
+  getExecutiveAnalytics,
+  seedHistoricalInspections,
 } from './server/storage';
 import {
   initBackupService,
@@ -733,6 +735,34 @@ async function startServer() {
         tonnage: tonnage as string,
       });
       res.json({ success: true, stats });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Executive Compliance & Fleet Analytics
+  app.get('/api/analytics', (req, res) => {
+    try {
+      const { timeframe, branch, truckCategory, dateFrom, dateTo } = req.query;
+      const analytics = getExecutiveAnalytics({
+        timeframe: timeframe as string,
+        branch: branch as string,
+        truckCategory: truckCategory as string,
+        dateFrom: dateFrom as string,
+        dateTo: dateTo as string,
+      });
+      res.json({ success: true, data: analytics });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Seed / Refresh demo historical inspection records for executive analytics
+  app.post('/api/analytics/seed-demo', (req, res) => {
+    try {
+      const daysBack = Number(req.body?.daysBack) || 30;
+      const result = seedHistoricalInspections(daysBack);
+      res.json({ success: true, message: `Successfully seeded ${result.seededCount} historical inspections for 30-day analytics.`, ...result });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

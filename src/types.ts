@@ -78,6 +78,38 @@ export interface AdminUser {
   role: string;
 }
 
+export interface RegionItem {
+  id: string;       // e.g. 'NORTHERN', 'CENTRAL', 'EAST', 'SOUTH'
+  name: string;     // e.g. 'NORTHERN', 'CENTRAL', 'EAST', 'SOUTH'
+  description?: string;
+  depotsCount?: number;
+  vehiclesCount?: number;
+}
+
+export interface DepotItem {
+  id: string;       // e.g. 'KJ', 'BL', 'KL'
+  code: string;     // e.g. 'KJ', 'BL', 'KL'
+  name?: string;    // e.g. 'KJ'
+  regionId: string; // e.g. 'NORTHERN', 'CENTRAL', 'EAST', 'SOUTH'
+  address?: string;
+  supervisorName?: string;
+  phone?: string;
+  active: boolean;
+  routesCount?: number;
+  vehiclesCount?: number;
+}
+
+export interface RouteItem {
+  id: string;       // e.g. '7K01', 'BL01'
+  code: string;     // e.g. '7K01', 'BL01'
+  name?: string;    // e.g. '7K01'
+  depotId: string;  // e.g. 'KJ', 'BL'
+  assignedVehiclePlate?: string;
+  assignedDriverId?: string;
+  active: boolean;
+  description?: string;
+}
+
 export type CheckStatus = 'Pass' | 'Fail' | 'NA';
 
 export interface InspectionCheckItem {
@@ -457,3 +489,79 @@ export const APAD_QUICK_SYSTEMS: QuickSystemCheckItem[] = [
   { id: 'mech_steering', group: 'Drive & Mechanical', label: 'Power Steering Handling', detail: 'Steering wheel turns freely without excessive play, stiffness, or vibration' },
   { id: 'mech_leaks_noise', group: 'Drive & Mechanical', label: 'No Fluid Leaks & Abnormal Noise', detail: 'No knocking sounds or oil/fluid drips underneath engine and chassis' },
 ];
+
+export interface DailyTrendPoint {
+  date: string;
+  dayLabel: string;
+  shortDate: string;
+  inspected: number;
+  passed: number;
+  defects: number;
+  complianceRate: number;
+}
+
+export interface DepotRankingItem {
+  rank: number;
+  depot: string;
+  depotName: string;
+  assignedVehicles: number;
+  totalInspections: number;
+  passedCount: number;
+  defectCount: number;
+  completionRate: number;
+  passRate: number;
+  complianceScore: number;
+  statusTier: 'Exceptional' | 'Compliant' | 'Needs Attention';
+}
+
+export interface DefectHotspotItem {
+  checkpointId: string;
+  title: string;
+  category: string;
+  defectCount: number;
+  percentage: number;
+  severity: 'Critical' | 'High' | 'Medium' | 'Low';
+  commonIssues: string[];
+  topRemarks: string[];
+  affectedVehicles: string[];
+}
+
+export interface ExecutiveAnalyticsData {
+  summary: {
+    totalInspections: number;
+    passedCount: number;
+    defectCount: number;
+    complianceRate: number;
+    firstTimePassRate: number;
+    activeVehiclesInspected: number;
+    totalFleetVehicles: number;
+    fleetCoverageRate: number;
+    groundedVehiclesNow: number;
+    totalDefectItemsLogged: number;
+    avgInspectionsPerDay: number;
+  };
+  dailyTrends: DailyTrendPoint[];
+  depotRankings: DepotRankingItem[];
+  defectHotspots: DefectHotspotItem[];
+  recentDefectLogs: {
+    id: string;
+    timestamp: string;
+    formattedDate: string;
+    vehicleNo: string;
+    vehicleBranch: string;
+    truckCategory?: string;
+    driverName: string;
+    driverDepot: string;
+    defectCount: number;
+    defectSummary: string;
+    failedItems: { id: string; title: string; defectNote: string }[];
+  }[];
+  meta: {
+    timeframe: string;
+    startDate: string;
+    endDate: string;
+    selectedBranch: string;
+    selectedCategory: string;
+    generatedAt: string;
+  };
+}

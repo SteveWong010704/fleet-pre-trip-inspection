@@ -5,6 +5,23 @@ import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, VehicleStatus 
 import { INITIAL_VEHICLES, INITIAL_DRIVERS } from './seedData';
 import { scheduleDebouncedBackup } from './backupService';
 import { logger } from './logger';
+import { generateHistoricalInspections, calculateExecutiveAnalytics, ExecutiveAnalyticsResult } from './analyticsService';
+import {
+  initOperationsStore,
+  getRegions as opGetRegions,
+  createRegion as opCreateRegion,
+  updateRegion as opUpdateRegion,
+  deleteRegion as opDeleteRegion,
+  getDepots as opGetDepots,
+  createDepot as opCreateDepot,
+  updateDepot as opUpdateDepot,
+  deleteDepot as opDeleteDepot,
+  getRoutes as opGetRoutes,
+  createRoute as opCreateRoute,
+  updateRoute as opUpdateRoute,
+  deleteRoute as opDeleteRoute,
+  syncRoutesFromVehicles,
+} from './operationsService';
 import {
   connectMssql,
   isMssqlConnected,
@@ -181,6 +198,16 @@ export function initStore() {
       saveStore(true);
       console.log(`[Storage] Initialized clean store with ${memoryStore.vehicles.length} preset vehicles and ${memoryStore.drivers.length} drivers.`);
     }
+
+    if (memoryStore.inspections.length === 0 && memoryStore.vehicles.length > 0) {
+      console.log('[Storage] No prior inspections detected. Auto-seeding 30-day realistic historical inspections for Executive Analytics...');
+      memoryStore.inspections = generateHistoricalInspections(memoryStore.vehicles, memoryStore.drivers, 30);
+      saveStore(true);
+      console.log(`[Storage] Auto-seeded ${memoryStore.inspections.length} historical pre-trip inspection records.`);
+    }
+
+    // Initialize Master Operations Hierarchy (Regions, Depots, Routes)
+    initOperationsStore(memoryStore.vehicles);
 
     // Connect to Microsoft SQL Server (SSMS) and synchronize data
     if (process.env.DB_TYPE !== 'json') {
@@ -1905,4 +1932,53 @@ export function getDatabaseStatus() {
     user: cfg.user,
   };
 }
+
+export function getExecutiveAnalytics(filters?: {
+  timeframe?: string;
+  branch?: string;
+  truckCategory?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}): ExecutiveAnalyticsResult {
+  return calculateExecutiveAnalytics(
+    memoryStore.inspections,
+    memoryStore.vehicles,
+    memoryStore.drivers,
+    filters
+  );
+}
+
+export function seedHistoricalInspections(daysBack: number = 30): { seededCount: number; totalInspections: number } {
+  const generated = generateHistoricalInspections(memoryStore.vehicles, memoryStore.drivers, daysBack);
+  memoryStore.inspections = generated;
+  saveStore(true);
+  invalidateFleetStatsCache();
+  addAuditLog({
+    eventType: 'DATA_MANAGEMENT',
+    operator: 'Admin Executive Portal',
+    ip: '127.0.0.1',
+    details: `Seeded ${generated.length} demo historical pre-trip inspection records for 30-day analytics.`,
+    severity: 'info',
+  });
+  return { seededCount: generated.length, totalInspections: memoryStore.inspections.length };
+}
+
+// ----------------- OPERATIONS HIERARCHY CRUD EXPORTS -----------------
+export function getRegions() { return opGetRegions(memoryStore.vehicles); }
+export function createRegion(item: any) { return opCreateRegion(item); }
+export function updateRegion(id: string, updates: any) { return opUpdateRegion(id, updates); }
+export function deleteRegion(id: string) { return opDeleteRegion(id); }
+
+export function getDepots() { return opGetDepots(memoryStore.vehicles); }
+export function createDepot(item: any) { return opCreateDepot(item); }
+export function updateDepot(id: string, updates: any) { return opUpdateDepot(id, updates); }
+export function deleteDepot(id: string) { return opDeleteDepot(id); }
+
+export function getRoutes() { return opGetRoutes(memoryStore.vehicles); }
+export function createRoute(item: any) { return opCreateRoute(item); }
+export function updateRoute(id: string, updates: any) { return opUpdateRoute(id, updates); }
+export function deleteRoute(id: string) { return opDeleteRoute(id); }
+export function syncRoutes() { return syncRoutesFromVehicles(memoryStore.vehicles); }
+
+
 
