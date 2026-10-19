@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, VehicleStatus } from '../src/types';
-import { INITIAL_VEHICLES, INITIAL_DRIVERS } from './seedData';
+import { LEGACY_DEMO_VEHICLES, LEGACY_DEMO_DRIVERS } from './legacyDemoIdentities';
 import { scheduleDebouncedBackup } from './backupService';
 import { logger } from './logger';
 import {
@@ -1371,11 +1371,11 @@ export function clearAllInspections(): void {
 // Remove only rows that can be positively identified as the legacy seed records.
 // Real records are preserved unless their full stable identity matches the bundled legacy seed identity.
 export async function purgeDemoData(): Promise<{ success: boolean; removedVehicles: number; removedDrivers: number; removedMockInspections: number; message: string }> {
-  const seededVehicles = new Map(INITIAL_VEHICLES.map(v => [
+  const seededVehicles = new Map(LEGACY_DEMO_VEHICLES.map(v => [
     String(v.vehicleNo || '').replace(/\\s+/g, '').toUpperCase(),
     { cardNo: String(v.cardNo || '').trim(), chassisNo: String(v.chassisNo || '').trim() },
   ]));
-  const seededDrivers = new Map(INITIAL_DRIVERS.map(d => [
+  const seededDrivers = new Map(LEGACY_DEMO_DRIVERS.map(d => [
     String(d.employeeId || '').trim().toUpperCase(),
     { loginId: String(d.loginId || '').trim().toUpperCase(), name: String(d.name || '').trim().toUpperCase() },
   ]));
