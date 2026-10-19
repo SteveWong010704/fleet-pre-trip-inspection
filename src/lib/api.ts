@@ -322,6 +322,14 @@ export async function clearAllInspections(securityPassword?: string): Promise<bo
   return true;
 }
 
+
+export async function purgeDemoData(): Promise<{ success: boolean; removedVehicles: number; removedDrivers: number; removedMockInspections: number; message: string }> {
+  const res = await authFetch('/api/storage/purge-demo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: 'PURGE_IDENTIFIED_DEMO_DATA' }) });
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.message || data.error || 'Failed to purge identifiable demo data');
+  return data;
+}
+
 export async function clearAllFleetData(securityPassword?: string): Promise<{ success: boolean; message: string }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (securityPassword) {
