@@ -40,10 +40,13 @@ import {
   bulkImportInspections,
   clearAllInspections,
   clearAllFleetData,
+  purgeDemoData,
   clearAllVehicles,
   clearAllDrivers,
   getSettings,
   updateSettings,
+  getOrgStructure,
+  updateOrgStructure,
   pruneOldInspections,
   getDatabaseStatus,
 } from './server/storage';
@@ -1178,6 +1181,19 @@ async function startServer() {
     }
   });
 
+  // Safely remove only positively identified legacy demo records. Real records are preserved.
+  app.post('/api/storage/purge-demo', requireAdmin, async (req, res) => {
+    if (req.body?.confirm !== 'PURGE_IDENTIFIED_DEMO_DATA') {
+      return res.status(400).json({ success: false, message: 'Explicit demo purge confirmation is required.' });
+    }
+    try {
+      const result = await purgeDemoData();
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Wipe entire fleet database (Admin & Master Password protected)
   app.post('/api/storage/clear-all', requireAdmin, requireSecurityPassword, (req, res) => {
     try {
@@ -1317,6 +1333,26 @@ async function startServer() {
       res.json({ success: true, settings: updated });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Region / Depot / Route master data. Persisted with the server's authoritative store.
+  app.get('/api/org-structure', requireAdmin, async (_req, res) => {
+    try {
+      const structure = await getOrgStructure();
+      res.json({ success: true, structure, dataSource: 'MSSQL' });
+    } catch (err: any) {
+      res.status(503).json({ success: false, message: err.message || 'SQL Server organization tables are unavailable.' });
+    }
+  });
+
+  app.put('/api/org-structure', requireAdmin, async (req, res) => {
+    try {
+      const structure = await updateOrgStructure(req.body?.structure || {});
+      res.json({ success: true, structure, dataSource: 'MSSQL' });
+    } catch (err: any) {
+      const message = err.message || 'Unable to save region, depot and route records to SQL Server.';
+      res.status(/SQL Server|MSSQL|database|connected/i.test(message) ? 503 : 400).json({ success: false, message });
     }
   });
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Vehicle, FleetStats } from '../../types';
-import { fetchVehicles, fetchStats, updateVehicleStatus, updateVehicle, createVehicle, deleteVehicle, regenerateVehicleQrToken } from '../../lib/api';
+import { fetchVehicles, fetchStats, updateVehicleStatus, updateVehicle, createVehicle, deleteVehicle, regenerateVehicleQrToken, fetchOrgStructure, OrgStructure } from '../../lib/api';
 import { exportVehiclesToCsv } from '../../lib/csvParser';
 import { buildVehicleDeepLink, getPublicBaseUrl } from '../../lib/publicUrl';
 import {
@@ -35,6 +35,7 @@ import QRCodeLib from 'qrcode';
 
 export const FleetOverview: React.FC = () => {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [orgStructure, setOrgStructure] = useState<OrgStructure>({ regions: [], depots: [], routes: [] });
   const [stats, setStats] = useState<FleetStats | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
@@ -67,6 +68,7 @@ export const FleetOverview: React.FC = () => {
   // Edit / Create Vehicle Modal
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
   const [editMode, setEditMode] = useState<'create' | 'edit'>('create');
+  const [selectedRegion, setSelectedRegion] = useState<string>('');
   const [vehicleForm, setVehicleForm] = useState<Partial<Vehicle>>({
     vehicleNo: '',
     brand: 'HINO',
@@ -89,6 +91,8 @@ export const FleetOverview: React.FC = () => {
   // Delete Vehicle State
   const [vehicleToDelete, setVehicleToDelete] = useState<Vehicle | null>(null);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+
+  useEffect(() => { fetchOrgStructure().then(setOrgStructure).catch(err => console.error('Failed to load region/depot/route masters:', err)); }, []);
 
   // Auto-refresh timer loop
   useEffect(() => {
@@ -159,14 +163,17 @@ export const FleetOverview: React.FC = () => {
 
   const handleOpenCreateVehicle = () => {
     setEditMode('create');
+    const firstDepot = orgStructure.depots[0];
+    const firstRoute = firstDepot ? orgStructure.routes.find(r => r.depotId === firstDepot.id) : undefined;
+    setSelectedRegion(firstDepot?.regionId || '');
     const randomPlate = `VFH${Math.floor(1000 + Math.random() * 9000)}`;
     setVehicleForm({
       vehicleNo: randomPlate,
       brand: 'HINO',
       model: 'XZU600R-HKMLJ3',
-      branch: 'BL',
-      area: 'BL01',
-      assignedRoute: 'BL01',
+      branch: firstDepot?.code || '',
+      area: firstRoute?.code || '',
+      assignedRoute: firstRoute?.code || '',
       tonnage: 1,
       currentStatus: 'Pending Inspection',
       cardNo: `7002841-500092-${Math.floor(100000 + Math.random() * 900000)}`,
@@ -184,6 +191,7 @@ export const FleetOverview: React.FC = () => {
 
   const handleOpenEditVehicle = (v: Vehicle) => {
     setEditMode('edit');
+    setSelectedRegion(orgStructure.depots.find(d => d.code.toUpperCase() === String(v.branch || '').toUpperCase())?.regionId || '');
     setVehicleForm({
       ...v,
       area: v.area || v.assignedRoute || `${v.branch || 'BL'}01`,
@@ -891,36 +899,37 @@ export const FleetOverview: React.FC = () => {
                   />
                 </div>
 
-                {/* Branch / Depot */}
+                {/* Region -> Depot -> Route cascading assignment uses the editable master records */}
                 <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Depot Branch Code *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={vehicleForm.branch || ''}
-                    onChange={(e) => setVehicleForm({ ...vehicleForm, branch: e.target.value.toUpperCase() })}
-                    placeholder="e.g. KL, BL, KJ, GB"
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Region *</label>
+                  <select required value={selectedRegion} onChange={e => {
+                    const regionId = e.target.value;
+                    const depot = orgStructure.depots.find(d => d.regionId === regionId);
+                    const route = depot ? orgStructure.routes.find(r => r.depotId === depot.id) : undefined;
+                    setSelectedRegion(regionId);
+                    setVehicleForm({ ...vehicleForm, branch: depot?.code || '', area: route?.code || '', assignedRoute: route?.code || '' });
+                  }} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">Select region</option>{orgStructure.regions.map(region => <option key={region.id} value={region.id}>{region.name}</option>)}
+                  </select>
+                  {!orgStructure.regions.length && <p className="text-[10px] text-amber-700">Create regions, depots and routes in Region / Depot / Route management first.</p>}
                 </div>
-
-                {/* Area / Route */}
                 <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Assigned Route / Area (e.g. BL01, KL01)
-                  </label>
-                  <input
-                    type="text"
-                    value={vehicleForm.area || ''}
-                    onChange={(e) => {
-                      const val = e.target.value.toUpperCase();
-                      setVehicleForm({ ...vehicleForm, area: val, assignedRoute: val });
-                    }}
-                    placeholder="e.g. BL01, BL02, KL01"
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Depot Branch Code *</label>
+                  <select required value={vehicleForm.branch || ''} onChange={e => {
+                    const depot = orgStructure.depots.find(d => d.code === e.target.value);
+                    const route = depot ? orgStructure.routes.find(r => r.depotId === depot.id) : undefined;
+                    setSelectedRegion(depot?.regionId || '');
+                    setVehicleForm({ ...vehicleForm, branch: depot?.code || '', area: route?.code || '', assignedRoute: route?.code || '' });
+                  }} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">Select depot</option>{orgStructure.depots.filter(d => !selectedRegion || d.regionId === selectedRegion).map(d => <option key={d.id} value={d.code}>{d.code} · {d.name} · {vehicles.filter(v => String(v.branch || '').toUpperCase() === d.code).length} vehicles</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Assigned Route *</label>
+                  <select required value={vehicleForm.assignedRoute || vehicleForm.area || ''} onChange={e => setVehicleForm({ ...vehicleForm, area: e.target.value, assignedRoute: e.target.value })} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">Select route</option>{orgStructure.routes.filter(r => { const d = orgStructure.depots.find(x => x.id === r.depotId); return d?.code === vehicleForm.branch; }).map(r => <option key={r.id} value={r.code}>{r.code} · {r.name}</option>)}
+                  </select>
+                  <p className="text-[10px] text-slate-400">Manage route master records in Region / Depot / Route. Route code must match the vehicle assignment.</p>
                 </div>
 
                 {/* Vehicle Category */}

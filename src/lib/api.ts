@@ -322,6 +322,14 @@ export async function clearAllInspections(securityPassword?: string): Promise<bo
   return true;
 }
 
+
+export async function purgeDemoData(): Promise<{ success: boolean; removedVehicles: number; removedDrivers: number; removedMockInspections: number; message: string }> {
+  const res = await authFetch('/api/storage/purge-demo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: 'PURGE_IDENTIFIED_DEMO_DATA' }) });
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.message || data.error || 'Failed to purge identifiable demo data');
+  return data;
+}
+
 export async function clearAllFleetData(securityPassword?: string): Promise<{ success: boolean; message: string }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (securityPassword) {
@@ -489,4 +497,29 @@ export async function pruneActiveDbInspections(maxDays: number = 45): Promise<{
     body: JSON.stringify({ maxDays }),
   });
   return await res.json();
+}
+
+
+export interface OrgStructure {
+  regions: { id: string; name: string }[];
+  depots: { id: string; code: string; name: string; regionId: string }[];
+  routes: { id: string; code: string; name: string; depotId: string }[];
+}
+
+export async function fetchOrgStructure(): Promise<OrgStructure> {
+  const res = await authFetch('/api/org-structure');
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.message || 'Unable to load organization structure');
+  return data.structure;
+}
+
+export async function saveOrgStructure(structure: OrgStructure): Promise<OrgStructure> {
+  const res = await authFetch('/api/org-structure', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ structure }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.message || 'Unable to save organization structure');
+  return data.structure;
 }

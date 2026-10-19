@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, VehicleStatus } from '../src/types';
-import { INITIAL_VEHICLES, INITIAL_DRIVERS } from './seedData';
+import { LEGACY_DEMO_VEHICLES, LEGACY_DEMO_DRIVERS } from './legacyDemoIdentities';
 import { scheduleDebouncedBackup } from './backupService';
 import { logger } from './logger';
 import {
@@ -25,6 +25,8 @@ import {
   dbClearDrivers,
   dbClearVehicles,
   dbClearInspections,
+  dbLoadOrgStructure,
+  dbSaveOrgStructure,
 } from './mssql';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -48,6 +50,11 @@ interface StoreState {
   auditLogs: AuditLog[];
   settings?: {
     publicBaseUrl?: string;
+    orgStructure?: {
+      regions: { id: string; name: string }[];
+      depots: { id: string; code: string; name: string; regionId: string }[];
+      routes: { id: string; code: string; name: string; depotId: string }[];
+    };
   };
 }
 
@@ -140,16 +147,6 @@ export function initStore() {
         console.log(`[Storage] Configured Public QR Base URL: ${memoryStore.settings.publicBaseUrl}`);
       }
 
-      if (memoryStore.vehicles.length === 0 && memoryStore.drivers.length === 0) {
-        memoryStore.vehicles = [...INITIAL_VEHICLES];
-        memoryStore.drivers = [...INITIAL_DRIVERS];
-        memoryStore.vehicles.forEach((v) => {
-          if (!v.qrToken) v.qrToken = generateVehicleQrToken();
-        });
-        saveStore(true);
-        console.log(`[Storage] Re-seeded with ${memoryStore.vehicles.length} vehicles and ${memoryStore.drivers.length} drivers.`);
-      }
-
       // Ensure all vehicles (including legacy/existing) have a unified static QR security token
       let legacyMigrated = false;
       memoryStore.vehicles.forEach((v) => {
@@ -163,23 +160,16 @@ export function initStore() {
         saveStore(true);
       }
 
-      // Automatically prune any inspection records older than 45 days on startup
-      pruneOldInspections(45);
+      // Preserve real inspection history across restarts. Retention cleanup must be an explicit admin action.
     } else {
-      // Clean start - initialize with preset fleet and drivers
-      memoryStore.vehicles = [...INITIAL_VEHICLES];
-      memoryStore.drivers = [...INITIAL_DRIVERS];
+      // Clean start: empty state only. Real data must be entered by an authorized import or database sync.
+      memoryStore.vehicles = [];
+      memoryStore.drivers = [];
       memoryStore.inspections = [];
       memoryStore.auditLogs = [];
       memoryStore.settings = { publicBaseUrl: envPublicUrl };
-      // Ensure all initial vehicles have static QR tokens
-      memoryStore.vehicles.forEach((v) => {
-        if (!v.qrToken || typeof v.qrToken !== 'string' || !v.qrToken.trim()) {
-          v.qrToken = generateVehicleQrToken();
-        }
-      });
       saveStore(true);
-      console.log(`[Storage] Initialized clean store with ${memoryStore.vehicles.length} preset vehicles and ${memoryStore.drivers.length} drivers.`);
+      console.log('[Storage] Initialized an empty store. No demo data was seeded.');
     }
 
     // Connect to Microsoft SQL Server (SSMS) and synchronize data
@@ -206,25 +196,21 @@ export function initStore() {
               if (mssqlTokenMigrated > 0) {
                 console.log(`[Storage] Auto-generated static QR security tokens for ${mssqlTokenMigrated} vehicles in SQL Server.`);
               }
-            } else if (memoryStore.vehicles.length > 0) {
-              console.log(`[MSSQL Auto-Sync] SQL Server Vehicles table is empty, auto-pushing ${memoryStore.vehicles.length} local vehicles to SQL Server...`);
-              await dbBulkSaveVehicles(memoryStore.vehicles);
+            } else {
+              // SQL Server is authoritative when enabled. Never re-seed an empty table from a stale local JSON cache.
+              memoryStore.vehicles = [];
             }
 
             if (dbD.length > 0) {
               memoryStore.drivers = dbD;
-            } else if (memoryStore.drivers.length > 0) {
-              console.log(`[MSSQL Auto-Sync] SQL Server Drivers table is empty, auto-pushing ${memoryStore.drivers.length} local drivers to SQL Server...`);
-              await dbBulkSaveDrivers(memoryStore.drivers);
+            } else {
+              memoryStore.drivers = [];
             }
 
             if (dbI.length > 0) {
               memoryStore.inspections = dbI;
-            } else if (memoryStore.inspections.length > 0) {
-              console.log(`[MSSQL Auto-Sync] SQL Server Inspections table is empty, auto-pushing ${memoryStore.inspections.length} local inspections to SQL Server...`);
-              for (const insp of memoryStore.inspections) {
-                await dbSaveInspection(insp);
-              }
+            } else {
+              memoryStore.inspections = [];
             }
             if (dbA.length > 0) memoryStore.auditLogs = dbA;
             console.log(`[MSSQL Sync] Successfully synchronized with SQL Server: ${memoryStore.vehicles.length} Vehicles, ${memoryStore.drivers.length} Drivers, ${memoryStore.inspections.length} Inspections.`);
@@ -1388,6 +1374,84 @@ export function clearAllInspections(): void {
   dbClearInspections().catch(e => console.error('[MSSQL Error] clearInspections:', e));
 }
 
+
+// Remove only rows that can be positively identified as the legacy seed records.
+// Real records are preserved unless their full stable identity matches the bundled legacy seed identity.
+export async function purgeDemoData(): Promise<{ success: boolean; removedVehicles: number; removedDrivers: number; removedMockInspections: number; message: string }> {
+  const seededVehicles = new Map<string, { cardNo: string; chassisNo: string }>(LEGACY_DEMO_VEHICLES.map(v => [
+    String(v.vehicleNo || '').replace(/\\s+/g, '').toUpperCase(),
+    { cardNo: String(v.cardNo || '').trim(), chassisNo: String(v.chassisNo || '').trim() },
+  ] as const));
+  const seededDrivers = new Map<string, { loginId: string; name: string }>(LEGACY_DEMO_DRIVERS.map(d => [
+    String(d.employeeId || '').trim().toUpperCase(),
+    { loginId: String(d.loginId || '').trim().toUpperCase(), name: String(d.name || '').trim().toUpperCase() },
+  ] as const));
+
+  // Only explicitly tagged mock records are eligible; ordinary inspection history is never deleted by this action.
+  const demoInspections = memoryStore.inspections.filter(i => /^(DEMO|MOCK|SEED|TEST)[-_]/i.test(String(i.id || '')));
+  const demoInspectionIds = new Set(demoInspections.map(i => i.id));
+  const preservedInspections = memoryStore.inspections.filter(i => !demoInspectionIds.has(i.id));
+  const demoVehicles = memoryStore.vehicles.filter(v => {
+    const plate = String(v.vehicleNo || '').replace(/\\s+/g, '').toUpperCase();
+    const expected = seededVehicles.get(plate);
+    const identityMatches = Boolean(expected && expected.cardNo && expected.chassisNo &&
+      String(v.cardNo || '').trim() === expected.cardNo &&
+      String(v.chassisNo || '').trim() === expected.chassisNo);
+    // Preserve a seeded vehicle if any non-demo inspection history still references it.
+    const hasPreservedHistory = preservedInspections.some(i => String(i.vehicleNo || '').replace(/\\s+/g, '').toUpperCase() === plate);
+    return identityMatches && !hasPreservedHistory;
+  });
+  const demoDrivers = memoryStore.drivers.filter(d => {
+    const employeeId = String(d.employeeId || '').trim().toUpperCase();
+    const loginId = String(d.loginId || '').trim().toUpperCase();
+    const expected = seededDrivers.get(employeeId);
+    const identityMatches = Boolean(expected && expected.loginId === loginId &&
+      expected.name === String(d.name || '').trim().toUpperCase());
+    const hasPreservedHistory = preservedInspections.some(i => {
+      const inspectionDriver = String(i.driverId || '').trim().toUpperCase();
+      return inspectionDriver === employeeId || inspectionDriver === loginId;
+    });
+    return identityMatches && !hasPreservedHistory;
+  });
+
+  const vehiclePlates = new Set(demoVehicles.map(v => String(v.vehicleNo).replace(/\\s+/g, '').toUpperCase()));
+  const driverIds = new Set(demoDrivers.map(d => String(d.employeeId).trim().toUpperCase()));
+  memoryStore.vehicles = memoryStore.vehicles.filter(v => !vehiclePlates.has(String(v.vehicleNo || '').replace(/\\s+/g, '').toUpperCase()));
+  memoryStore.drivers = memoryStore.drivers.filter(d => !driverIds.has(String(d.employeeId || '').trim().toUpperCase()));
+  const inspectionIds = new Set(demoInspections.map(i => i.id));
+  memoryStore.inspections = memoryStore.inspections.filter(i => !inspectionIds.has(i.id));
+
+  // Delete tagged inspections first to respect common SQL foreign-key relationships.
+  for (const i of demoInspections) {
+    await dbDeleteInspection(i.id).catch(e => logger.error('DEMO_PURGE', 'Failed to remove tagged mock inspection from SQL Server', e));
+  }
+  for (const v of demoVehicles) {
+    await dbDeleteVehicle(String(v.vehicleNo).replace(/\\s+/g, '').toUpperCase()).catch(e => logger.error('DEMO_PURGE', 'Failed to remove demo vehicle from SQL Server', e));
+  }
+  for (const d of demoDrivers) {
+    await dbDeleteDriver(d.employeeId).catch(e => logger.error('DEMO_PURGE', 'Failed to remove demo driver from SQL Server', e));
+  }
+
+  if (demoVehicles.length || demoDrivers.length || demoInspections.length) {
+    addAuditLog({
+      eventType: 'DEMO_DATA_PURGED',
+      operator: 'Admin',
+      ip: '127.0.0.1',
+      details: `Purged identifiable legacy demo records only: ${demoVehicles.length} vehicles, ${demoDrivers.length} drivers, ${demoInspections.length} explicitly tagged mock inspections. Unmarked inspection history was preserved; seeded vehicles/drivers with preserved history were retained.`,
+      severity: 'warning',
+    });
+  }
+  invalidateFleetStatsCache();
+  saveStore(true);
+  return {
+    success: true,
+    removedVehicles: demoVehicles.length,
+    removedDrivers: demoDrivers.length,
+    removedMockInspections: demoInspections.length,
+    message: `Removed ${demoVehicles.length} identified demo vehicles, ${demoDrivers.length} identified demo drivers and ${demoInspections.length} tagged mock inspections. Unmarked inspection history was preserved.`,
+  };
+}
+
 // Full fleet database wipe - resets to 100% clean state
 export function clearAllFleetData(): { success: boolean; message: string } {
   memoryStore.vehicles = [];
@@ -1870,27 +1934,53 @@ export function getGoogleFormCsvTemplate(): string {
 }
 
 // Public Base URL & System Settings
+export interface OrgStructure {
+  regions: { id: string; name: string }[];
+  depots: { id: string; code: string; name: string; regionId: string }[];
+  routes: { id: string; code: string; name: string; depotId: string }[];
+}
+
+export async function getOrgStructure(): Promise<OrgStructure> {
+  if (process.env.DB_TYPE === 'json') {
+    throw new Error('Region, depot and route master data require SQL Server. Set DB_TYPE to MSSQL and ensure the database connection is available.');
+  }
+  return dbLoadOrgStructure();
+}
+
+export async function updateOrgStructure(structure: OrgStructure): Promise<OrgStructure> {
+  if (process.env.DB_TYPE === 'json') {
+    throw new Error('Refusing to save region, depot or route master data to JSON. Configure SQL Server first.');
+  }
+  const clean = {
+    regions: (structure.regions || []).map(x => ({ id: String(x.id || '').trim(), name: String(x.name || '').trim() })).filter(x => x.id && x.name),
+    depots: (structure.depots || []).map(x => ({ id: String(x.id || '').trim(), code: String(x.code || '').trim().toUpperCase(), name: String(x.name || '').trim(), regionId: String(x.regionId || '').trim() })).filter(x => x.id && x.code && x.name && x.regionId),
+    routes: (structure.routes || []).map(x => ({ id: String(x.id || '').trim(), code: String(x.code || '').trim().toUpperCase(), name: String(x.name || '').trim(), depotId: String(x.depotId || '').trim() })).filter(x => x.id && x.code && x.name && x.depotId),
+  };
+  if (new Set(clean.regions.map(x => x.id)).size !== clean.regions.length) throw new Error('Duplicate region IDs are not allowed.');
+  if (new Set(clean.depots.map(x => x.id)).size !== clean.depots.length) throw new Error('Duplicate depot codes are not allowed.');
+  if (new Set(clean.routes.map(x => x.id)).size !== clean.routes.length) throw new Error('Duplicate route IDs are not allowed.');
+  if (new Set(clean.depots.map(x => x.code)).size !== clean.depots.length) throw new Error('Duplicate depot codes are not allowed.');
+  if (new Set(clean.routes.map(x => x.code)).size !== clean.routes.length) throw new Error('Duplicate route codes are not allowed.');
+  const regionIds = new Set(clean.regions.map(x => x.id));
+  const depotIds = new Set(clean.depots.map(x => x.id));
+  if (clean.depots.some(x => !regionIds.has(x.regionId))) throw new Error('Every depot must belong to an existing region.');
+  if (clean.routes.some(x => !depotIds.has(x.depotId))) throw new Error('Every route must belong to an existing depot.');
+  return dbSaveOrgStructure(clean);
+}
+
 export function getSettings() {
   const envPublicUrl = (process.env.PUBLIC_URL || process.env.PUBLIC_BASE_URL || process.env.NGROK_URL || '').trim();
   let publicBaseUrl = memoryStore.settings?.publicBaseUrl || '';
-
   if (envPublicUrl && (!publicBaseUrl || isLocalOrPrivateHost(publicBaseUrl))) {
     publicBaseUrl = envPublicUrl;
-    if (memoryStore.settings) {
-      memoryStore.settings.publicBaseUrl = envPublicUrl;
-    }
+    if (memoryStore.settings) memoryStore.settings.publicBaseUrl = envPublicUrl;
   }
-
   return { publicBaseUrl };
 }
 
 export function updateSettings(newSettings: { publicBaseUrl?: string }) {
-  if (!memoryStore.settings) {
-    memoryStore.settings = {};
-  }
-  if (typeof newSettings.publicBaseUrl === 'string') {
-    memoryStore.settings.publicBaseUrl = newSettings.publicBaseUrl.trim();
-  }
+  if (!memoryStore.settings) memoryStore.settings = {};
+  if (typeof newSettings.publicBaseUrl === 'string') memoryStore.settings.publicBaseUrl = newSettings.publicBaseUrl.trim();
   saveStore();
   return memoryStore.settings;
 }
