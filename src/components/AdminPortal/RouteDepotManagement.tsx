@@ -24,7 +24,11 @@ export const RouteDepotManagement: React.FC = () => {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => { void load(); }, 15000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const depotRows = useMemo(() => {
     const result: { region: string; depot: string; vehicles: Vehicle[]; routes: { route: string; plates: string[] }[] }[] = [];
