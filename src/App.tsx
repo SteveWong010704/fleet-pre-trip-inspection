@@ -35,7 +35,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'driver' | 'admin'>(() => {
     return isDriverQrScan() ? 'driver' : 'admin';
   });
-  const [adminTab, setAdminTab] = useState<'fleet' | 'analytics' | 'drivers' | 'history' | 'bulk' | 'qr' | 'logs' | 'backup' | 'data'>('fleet');
+  const [adminTab, setAdminTab] = useState<'fleet' | 'analytics' | 'routes' | 'drivers' | 'history' | 'bulk' | 'qr' | 'logs' | 'backup' | 'data'>('fleet');
 
   // Admin Auth State (session persisted so refresh on 192.168.1.80 maintains admin session)
   const [activeAdmin, setActiveAdmin] = useState<AdminUser | null>(() => {
