@@ -1371,14 +1371,14 @@ export function clearAllInspections(): void {
 // Remove only rows that can be positively identified as the legacy seed records.
 // Real records are preserved unless their full stable identity matches the bundled legacy seed identity.
 export async function purgeDemoData(): Promise<{ success: boolean; removedVehicles: number; removedDrivers: number; removedMockInspections: number; message: string }> {
-  const seededVehicles = new Map(LEGACY_DEMO_VEHICLES.map(v => [
+  const seededVehicles = new Map<string, { cardNo: string; chassisNo: string }>(LEGACY_DEMO_VEHICLES.map(v => [
     String(v.vehicleNo || '').replace(/\\s+/g, '').toUpperCase(),
     { cardNo: String(v.cardNo || '').trim(), chassisNo: String(v.chassisNo || '').trim() },
-  ]));
-  const seededDrivers = new Map(LEGACY_DEMO_DRIVERS.map(d => [
+  ] as const));
+  const seededDrivers = new Map<string, { loginId: string; name: string }>(LEGACY_DEMO_DRIVERS.map(d => [
     String(d.employeeId || '').trim().toUpperCase(),
     { loginId: String(d.loginId || '').trim().toUpperCase(), name: String(d.name || '').trim().toUpperCase() },
-  ]));
+  ] as const));
 
   // Only explicitly tagged mock records are eligible; ordinary inspection history is never deleted by this action.
   const demoInspections = memoryStore.inspections.filter(i => /^(DEMO|MOCK|SEED|TEST)[-_]/i.test(String(i.id || '')));
