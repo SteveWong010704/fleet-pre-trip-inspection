@@ -14,11 +14,13 @@ import { BulkManager } from './components/AdminPortal/BulkManager';
 import { QrCodeGenerator } from './components/AdminPortal/QrCodeGenerator';
 import { AuditLogViewer } from './components/AdminPortal/AuditLogViewer';
 import { BackupRetentionManager } from './components/AdminPortal/BackupRetentionManager';
+import { DailyDepotAnalytics } from './components/AdminPortal/DailyDepotAnalytics';
+import { DataMaintenance } from './components/AdminPortal/DataMaintenance';
 import { fetchVehicleByPlate, checkDriverDailyInspection, checkVehicleDailyInspection, clearAuthToken } from './lib/api';
 import { syncPublicBaseUrlFromServer } from './lib/publicUrl';
 import { getCheckpointRequiredPhotoCount } from './lib/checkpointConfig';
 import { getDefaultSystemChecks } from './lib/quickChecklistConfig';
-import { Smartphone, LayoutDashboard, Truck, ClipboardList, Send, FileCheck, ArrowLeft, ArrowRight, ShieldCheck, Users, AlertTriangle, HardDrive } from 'lucide-react';
+import { Smartphone, LayoutDashboard, Truck, ClipboardList, Send, FileCheck, ArrowLeft, ArrowRight, ShieldCheck, Users, AlertTriangle, HardDrive, BarChart3, Database } from 'lucide-react';
 
 export default function App() {
   // Check if opened from a Driver QR code scan (?plate=XXX or ?view=driver or ?certId=XXX)
@@ -32,7 +34,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'driver' | 'admin'>(() => {
     return isDriverQrScan() ? 'driver' : 'admin';
   });
-  const [adminTab, setAdminTab] = useState<'fleet' | 'drivers' | 'history' | 'bulk' | 'qr' | 'logs' | 'backup'>('fleet');
+  const [adminTab, setAdminTab] = useState<'fleet' | 'analytics' | 'drivers' | 'history' | 'bulk' | 'qr' | 'logs' | 'backup' | 'data'>('fleet');
 
   // Admin Auth State (session persisted so refresh on 192.168.1.80 maintains admin session)
   const [activeAdmin, setActiveAdmin] = useState<AdminUser | null>(() => {
@@ -414,6 +416,16 @@ export default function App() {
                   </button>
 
                   <button
+                    onClick={() => setAdminTab('analytics')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                      adminTab === 'analytics' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    <BarChart3 className="w-4 h-4" />
+                    <span>Daily Depot Analytics</span>
+                  </button>
+
+                  <button
                     onClick={() => setAdminTab('drivers')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'drivers' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -464,6 +476,16 @@ export default function App() {
                   </button>
 
                   <button
+                    onClick={() => setAdminTab('data')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                      adminTab === 'data' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    <Database className="w-4 h-4" />
+                    <span>Real Data Maintenance</span>
+                  </button>
+
+                  <button
                     onClick={() => setAdminTab('backup')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'backup' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -476,6 +498,8 @@ export default function App() {
 
                 {/* Sub-Tab View Rendering */}
                 {adminTab === 'fleet' && <FleetOverview />}
+                {adminTab === 'analytics' && <DailyDepotAnalytics />
+                {adminTab === 'data' && <DataMaintenance />}
                 {adminTab === 'drivers' && <DriverManagement />}
                 {adminTab === 'history' && <InspectionHistory />}
                 {adminTab === 'bulk' && <BulkManager />}
