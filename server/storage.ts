@@ -153,8 +153,7 @@ export function initStore() {
         saveStore(true);
       }
 
-      // Automatically prune any inspection records older than 45 days on startup
-      pruneOldInspections(45);
+      // Preserve real inspection history across restarts. Retention cleanup must be an explicit admin action.
     } else {
       // Clean start: empty state only. Real data must be entered by an authorized import or database sync.
       memoryStore.vehicles = [];
