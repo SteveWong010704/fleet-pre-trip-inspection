@@ -48,6 +48,11 @@ interface StoreState {
   auditLogs: AuditLog[];
   settings?: {
     publicBaseUrl?: string;
+    orgStructure?: {
+      regions: { id: string; name: string }[];
+      depots: { id: string; code: string; name: string; regionId: string }[];
+      routes: { id: string; code: string; name: string; depotId: string }[];
+    };
   };
 }
 
@@ -1927,27 +1932,53 @@ export function getGoogleFormCsvTemplate(): string {
 }
 
 // Public Base URL & System Settings
+export interface OrgStructure {
+  regions: { id: string; name: string }[];
+  depots: { id: string; code: string; name: string; regionId: string }[];
+  routes: { id: string; code: string; name: string; depotId: string }[];
+}
+
+export function getOrgStructure(): OrgStructure {
+  const saved = memoryStore.settings?.orgStructure;
+  return saved ? {
+    regions: Array.isArray(saved.regions) ? saved.regions : [],
+    depots: Array.isArray(saved.depots) ? saved.depots : [],
+    routes: Array.isArray(saved.routes) ? saved.routes : [],
+  } : { regions: [], depots: [], routes: [] };
+}
+
+export function updateOrgStructure(structure: OrgStructure): OrgStructure {
+  const clean = {
+    regions: (structure.regions || []).map(x => ({ id: String(x.id || '').trim(), name: String(x.name || '').trim() })).filter(x => x.id && x.name),
+    depots: (structure.depots || []).map(x => ({ id: String(x.id || '').trim(), code: String(x.code || '').trim().toUpperCase(), name: String(x.name || '').trim(), regionId: String(x.regionId || '').trim() })).filter(x => x.id && x.code && x.name && x.regionId),
+    routes: (structure.routes || []).map(x => ({ id: String(x.id || '').trim(), code: String(x.code || '').trim().toUpperCase(), name: String(x.name || '').trim(), depotId: String(x.depotId || '').trim() })).filter(x => x.id && x.code && x.name && x.depotId),
+  };
+  if (new Set(clean.regions.map(x => x.id)).size !== clean.regions.length) throw new Error('Duplicate region IDs are not allowed.');
+  if (new Set(clean.depots.map(x => x.code)).size !== clean.depots.length) throw new Error('Duplicate depot codes are not allowed.');
+  if (new Set(clean.routes.map(x => x.code)).size !== clean.routes.length) throw new Error('Duplicate route codes are not allowed.');
+  const regionIds = new Set(clean.regions.map(x => x.id));
+  const depotIds = new Set(clean.depots.map(x => x.id));
+  if (clean.depots.some(x => !regionIds.has(x.regionId))) throw new Error('Every depot must belong to an existing region.');
+  if (clean.routes.some(x => !depotIds.has(x.depotId))) throw new Error('Every route must belong to an existing depot.');
+  if (!memoryStore.settings) memoryStore.settings = {};
+  memoryStore.settings.orgStructure = clean;
+  saveStore();
+  return clean;
+}
+
 export function getSettings() {
   const envPublicUrl = (process.env.PUBLIC_URL || process.env.PUBLIC_BASE_URL || process.env.NGROK_URL || '').trim();
   let publicBaseUrl = memoryStore.settings?.publicBaseUrl || '';
-
   if (envPublicUrl && (!publicBaseUrl || isLocalOrPrivateHost(publicBaseUrl))) {
     publicBaseUrl = envPublicUrl;
-    if (memoryStore.settings) {
-      memoryStore.settings.publicBaseUrl = envPublicUrl;
-    }
+    if (memoryStore.settings) memoryStore.settings.publicBaseUrl = envPublicUrl;
   }
-
   return { publicBaseUrl };
 }
 
 export function updateSettings(newSettings: { publicBaseUrl?: string }) {
-  if (!memoryStore.settings) {
-    memoryStore.settings = {};
-  }
-  if (typeof newSettings.publicBaseUrl === 'string') {
-    memoryStore.settings.publicBaseUrl = newSettings.publicBaseUrl.trim();
-  }
+  if (!memoryStore.settings) memoryStore.settings = {};
+  if (typeof newSettings.publicBaseUrl === 'string') memoryStore.settings.publicBaseUrl = newSettings.publicBaseUrl.trim();
   saveStore();
   return memoryStore.settings;
 }
