@@ -6,7 +6,7 @@ import { Vehicle } from '../../types';
 const DEPOTS_BY_REGION: Record<string, string[]> = {
   NORTHERN: ['PG', 'IP', 'MN', 'LN'],
   CENTRAL: ['KJ', 'GB', 'BL', 'KL', 'NL'],
-  EAST: ['KT', 'TR'],
+  EAST: [],
   SOUTH: ['AG', 'SB', 'JB'],
 };
 
