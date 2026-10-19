@@ -40,6 +40,7 @@ import {
   bulkImportInspections,
   clearAllInspections,
   clearAllFleetData,
+  purgeDemoData,
   clearAllVehicles,
   clearAllDrivers,
   getSettings,
@@ -1173,6 +1174,19 @@ async function startServer() {
     try {
       clearAllInspections();
       res.json({ success: true, message: 'All inspections cleared. Vehicles reset to Pending Inspection.' });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Safely remove only positively identified legacy demo records. Real records are preserved.
+  app.post('/api/storage/purge-demo', requireAdmin, async (req, res) => {
+    if (req.body?.confirm !== 'PURGE_IDENTIFIED_DEMO_DATA') {
+      return res.status(400).json({ success: false, message: 'Explicit demo purge confirmation is required.' });
+    }
+    try {
+      const result = await purgeDemoData();
+      res.json(result);
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
