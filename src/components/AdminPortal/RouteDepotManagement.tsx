@@ -1,190 +1,201 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Route as RouteIcon, Truck, MapPin, Search, Building2, Layers3 } from 'lucide-react';
-import { fetchVehicles } from '../../lib/api';
+import { Building2, Layers3, MapPin, Plus, RefreshCw, Route as RouteIcon, Search, Pencil, Trash2, Truck, X, AlertTriangle, Save } from 'lucide-react';
+import { fetchVehicles, fetchOrgStructure, saveOrgStructure, OrgStructure } from '../../lib/api';
 import { Vehicle } from '../../types';
 
-const DEPOTS_BY_REGION: Record<string, string[]> = {
-  NORTHERN: ['PG', 'IP', 'MN', 'LN'],
-  CENTRAL: ['KJ', 'GB', 'BL', 'KL', 'NL'],
-  EAST: [],
-  SOUTH: ['AG', 'SB', 'JB'],
-};
-
-type ViewTab = 'regions' | 'depots' | 'routes';
-
-const normalise = (value?: string) => String(value || '').trim().toUpperCase();
-const getDepot = (vehicle: Vehicle) => normalise(vehicle.branch);
-const getRoute = (vehicle: Vehicle) => normalise(vehicle.assignedRoute || vehicle.area) || 'UNASSIGNED';
+type Tab = 'regions' | 'depots' | 'routes';
+type FormKind = 'region' | 'depot' | 'route';
+type FormState = { id?: string; name: string; code: string; parentId: string };
+const emptyStructure: OrgStructure = { regions: [], depots: [], routes: [] };
+const norm = (v?: string) => String(v || '').trim().toUpperCase();
+const id = (kind: string) => `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+const getDepotCode = (v: Vehicle) => norm(v.branch);
+const getRouteCode = (v: Vehicle) => norm(v.assignedRoute || v.area);
 
 export const RouteDepotManagement: React.FC = () => {
+  const [structure, setStructure] = useState<OrgStructure>(emptyStructure);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<ViewTab>('regions');
+  const [activeTab, setActiveTab] = useState<Tab>('regions');
+  const [search, setSearch] = useState('');
   const [regionFilter, setRegionFilter] = useState('ALL');
   const [depotFilter, setDepotFilter] = useState('ALL');
-  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [formKind, setFormKind] = useState<FormKind | null>(null);
+  const [form, setForm] = useState<FormState>({ name: '', code: '', parentId: '' });
 
   const load = async () => {
-    setLoading(true);
-    setError('');
+    setLoading(true); setError('');
     try {
-      setVehicles(await fetchVehicles());
-    } catch (e: any) {
-      setError(e?.message || 'Unable to load depot and route assignments.');
-    } finally {
-      setLoading(false);
-    }
+      const [s, v] = await Promise.all([fetchOrgStructure(), fetchVehicles()]);
+      setStructure(s || emptyStructure); setVehicles(v || []);
+    } catch (e: any) { setError(e?.message || 'Could not load master data and fleet assignments.'); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void load(); }, []);
+
+  const vehicleDepotCodes = useMemo(() => Array.from(new Set(vehicles.map(getDepotCode).filter(Boolean))).sort(), [vehicles]);
+  const registeredCodes = useMemo(() => new Set(structure.depots.map(d => norm(d.code))), [structure.depots]);
+  const unregisteredDepotCodes = vehicleDepotCodes.filter(code => !registeredCodes.has(code));
+  const routeAssignments = useMemo(() => {
+    const map = new Map<string, Vehicle[]>();
+    vehicles.forEach(v => {
+      const depot = getDepotCode(v) || 'NO DEPOT';
+      const route = getRouteCode(v) || 'NO ROUTE';
+      const key = `${depot}::${route}`;
+      map.set(key, [...(map.get(key) || []), v]);
+    });
+    return map;
+  }, [vehicles]);
+
+  const visibleRegions = structure.regions.filter(r => !search || r.name.toLowerCase().includes(search.toLowerCase()));
+  const visibleDepots = structure.depots.filter(d =>
+    (regionFilter === 'ALL' || d.regionId === regionFilter) &&
+    (!search || [d.code, d.name, structure.regions.find(r => r.id === d.regionId)?.name || ''].some(s => s.toLowerCase().includes(search.toLowerCase())))
+  );
+  const visibleRoutes = structure.routes.filter(r => {
+    const depot = structure.depots.find(d => d.id === r.depotId);
+    return (regionFilter === 'ALL' || depot?.regionId === regionFilter) &&
+      (depotFilter === 'ALL' || r.depotId === depotFilter) &&
+      (!search || [r.code, r.name, depot?.code || '', depot?.name || ''].some(s => s.toLowerCase().includes(search.toLowerCase())));
+  });
+
+  const openCreate = (kind: FormKind, parentId = '') => {
+    setError(''); setNotice(''); setFormKind(kind);
+    setForm({ name: '', code: '', parentId, id: undefined });
+  };
+  const openEdit = (kind: FormKind, item: any) => {
+    setError(''); setNotice(''); setFormKind(kind);
+    setForm({
+      id: item.id, name: item.name || '', code: item.code || '',
+      parentId: kind === 'depot' ? item.regionId : kind === 'route' ? item.depotId : ''
+    });
   };
 
-  useEffect(() => {
-    void load();
-    const timer = window.setInterval(() => { void load(); }, 30000);
-    return () => window.clearInterval(timer);
-  }, []);
+  const persist = async (next: OrgStructure, success: string) => {
+    setSaving(true); setError(''); setNotice('');
+    try {
+      const saved = await saveOrgStructure(next);
+      setStructure(saved); setNotice(success); setFormKind(null);
+    } catch (e: any) { setError(e?.message || 'Unable to save changes.'); }
+    finally { setSaving(false); }
+  };
 
-  const regionForDepot = (depot: string) =>
-    Object.entries(DEPOTS_BY_REGION).find(([, depots]) => depots.includes(depot))?.[0] || 'UNMAPPED';
+  const submitForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name.trim()) { setError('Name is required.'); return; }
+    let next: OrgStructure = {
+      regions: [...structure.regions], depots: [...structure.depots], routes: [...structure.routes]
+    };
+    const entityId = form.id || id(formKind || 'item');
+    if (formKind === 'region') {
+      const name = form.name.trim();
+      if (next.regions.some(r => r.id !== form.id && r.name.toLowerCase() === name.toLowerCase())) { setError('A region with this name already exists.'); return; }
+      const item = { id: entityId, name };
+      next.regions = form.id ? next.regions.map(r => r.id === form.id ? item : r) : [...next.regions, item];
+    } else if (formKind === 'depot') {
+      const code = form.code.trim().toUpperCase();
+      if (!code) { setError('Depot code is required.'); return; }
+      if (!form.parentId || !next.regions.some(r => r.id === form.parentId)) { setError('Select a valid region.'); return; }
+      if (next.depots.some(d => d.id !== form.id && d.code.toUpperCase() === code)) { setError('Depot code already exists.'); return; }
+      const item = { id: entityId, code, name: form.name.trim(), regionId: form.parentId };
+      next.depots = form.id ? next.depots.map(d => d.id === form.id ? item : d) : [...next.depots, item];
+    } else if (formKind === 'route') {
+      const code = form.code.trim().toUpperCase();
+      if (!code) { setError('Route code is required.'); return; }
+      if (!form.parentId || !next.depots.some(d => d.id === form.parentId)) { setError('Select a valid depot.'); return; }
+      if (next.routes.some(r => r.id !== form.id && r.code.toUpperCase() === code)) { setError('Route code already exists.'); return; }
+      const item = { id: entityId, code, name: form.name.trim(), depotId: form.parentId };
+      next.routes = form.id ? next.routes.map(r => r.id === form.id ? item : r) : [...next.routes, item];
+    }
+    await persist(next, `${formKind === 'region' ? 'Region' : formKind === 'depot' ? 'Depot' : 'Route'} saved successfully.`);
+  };
 
-  const depotRows = useMemo(() => {
-    const allDepotCodes = new Set([
-      ...Object.values(DEPOTS_BY_REGION).flat(),
-      ...vehicles.map(getDepot).filter(Boolean),
-    ]);
-    return Array.from(allDepotCodes).sort().map(depot => {
-      const assigned = vehicles.filter(v => getDepot(v) === depot);
-      const routeNames = new Set(assigned.map(getRoute));
-      return { depot, region: regionForDepot(depot), vehicles: assigned, routeCount: routeNames.size };
-    }).filter(row => regionFilter === 'ALL' || row.region === regionFilter)
-      .filter(row => !search || row.depot.toLowerCase().includes(search.toLowerCase()) || row.region.toLowerCase().includes(search.toLowerCase()));
-  }, [vehicles, regionFilter, search]);
+  const remove = async (kind: FormKind, item: any) => {
+    const next: OrgStructure = { regions: [...structure.regions], depots: [...structure.depots], routes: [...structure.routes] };
+    if (kind === 'region') {
+      const linked = next.depots.filter(d => d.regionId === item.id);
+      if (linked.length) { setError(`Cannot delete ${item.name}: ${linked.length} depot(s) still belong to this region. Move or delete those depots first.`); return; }
+      next.regions = next.regions.filter(r => r.id !== item.id);
+    } else if (kind === 'depot') {
+      const linkedRoutes = next.routes.filter(r => r.depotId === item.id);
+      const assignedVehicles = vehicles.filter(v => getDepotCode(v) === norm(item.code));
+      if (linkedRoutes.length || assignedVehicles.length) { setError(`Cannot delete depot ${item.code}: it has ${linkedRoutes.length} route(s) and ${assignedVehicles.length} vehicle assignment(s). Reassign them first.`); return; }
+      next.depots = next.depots.filter(d => d.id !== item.id);
+    } else {
+      const assigned = vehicles.filter(v => getRouteCode(v) === norm(item.code));
+      if (assigned.length) { setError(`Cannot delete route ${item.code}: ${assigned.length} vehicle(s) still use this route code. Reassign them first.`); return; }
+      next.routes = next.routes.filter(r => r.id !== item.id);
+    }
+    if (!window.confirm(`Delete ${kind} "${item.name || item.code}"?`)) return;
+    await persist(next, `${kind[0].toUpperCase() + kind.slice(1)} deleted.`);
+  };
 
-  const routeRows = useMemo(() => {
-    const map = new Map<string, { route: string; depot: string; region: string; vehicles: Vehicle[] }>();
-    vehicles.forEach(vehicle => {
-      const depot = getDepot(vehicle) || 'UNASSIGNED DEPOT';
-      const route = getRoute(vehicle);
-      const key = `${depot}::${route}`;
-      const current = map.get(key) || { route, depot, region: regionForDepot(depot), vehicles: [] };
-      current.vehicles.push(vehicle);
-      map.set(key, current);
-    });
-    return Array.from(map.values()).sort((a, b) => a.depot.localeCompare(b.depot) || a.route.localeCompare(b.route))
-      .filter(row => regionFilter === 'ALL' || row.region === regionFilter)
-      .filter(row => depotFilter === 'ALL' || row.depot === depotFilter)
-      .filter(row => !search || row.route.toLowerCase().includes(search.toLowerCase()) || row.depot.toLowerCase().includes(search.toLowerCase()) || row.vehicles.some(v => v.vehicleNo.toLowerCase().includes(search.toLowerCase())));
-  }, [vehicles, regionFilter, depotFilter, search]);
+  const registerExistingDepot = (code: string) => {
+    setActiveTab('depots'); setRegionFilter('ALL');
+    setFormKind('depot'); setForm({ id: undefined, name: code, code, parentId: structure.regions[0]?.id || '' });
+    setError(''); setNotice('');
+    if (!structure.regions.length) setError('Create a region first, then register this existing depot under it.');
+  };
 
-  const regionRows = useMemo(() => Object.keys(DEPOTS_BY_REGION).map(region => {
-    const knownDepots = new Set([
-      ...DEPOTS_BY_REGION[region],
-      ...vehicles.map(getDepot).filter(depot => depot && regionForDepot(depot) === region),
-    ]);
-    const regionVehicles = vehicles.filter(v => regionForDepot(getDepot(v)) === region);
-    return { region, depotCount: knownDepots.size, vehicleCount: regionVehicles.length };
-  }).filter(row => regionFilter === 'ALL' || row.region === regionFilter)
-    .filter(row => !search || row.region.toLowerCase().includes(search.toLowerCase())), [vehicles, regionFilter, search]);
-
-  const tabs: { id: ViewTab; label: string; description: string; count: number; icon: React.ReactNode }[] = [
-    { id: 'regions', label: 'Regions', description: 'Overview by region', count: Object.keys(DEPOTS_BY_REGION).length, icon: <Layers3 className="h-4 w-4" /> },
-    { id: 'depots', label: 'Depots', description: 'Depot roster and capacity', count: depotRows.length, icon: <Building2 className="h-4 w-4" /> },
-    { id: 'routes', label: 'Routes & Vehicles', description: 'Current route assignments', count: routeRows.length, icon: <RouteIcon className="h-4 w-4" /> },
+  const tabs: { id: Tab; label: string; count: number; icon: React.ReactNode }[] = [
+    { id: 'regions', label: 'Regions', count: structure.regions.length, icon: <Layers3 className="h-4 w-4" /> },
+    { id: 'depots', label: 'Depots', count: structure.depots.length, icon: <Building2 className="h-4 w-4" /> },
+    { id: 'routes', label: 'Routes', count: structure.routes.length, icon: <RouteIcon className="h-4 w-4" /> },
   ];
 
-  return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-blue-600">Fleet structure</p>
-          <h2 className="mt-1 text-2xl font-black tracking-tight text-slate-900">Region, Depot & Route Management</h2>
-          <p className="mt-1 max-w-2xl text-sm text-slate-500">Browse one level at a time. Counts are calculated from current vehicle assignments.</p>
-        </div>
-        <button onClick={() => void load()} disabled={loading} className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-50">
-          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh data
-        </button>
+  return <div className="space-y-5">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-blue-600">Fleet structure</p>
+        <h2 className="mt-1 text-2xl font-black tracking-tight text-slate-900">Region, Depot & Route Management</h2>
+        <p className="mt-1 max-w-2xl text-sm text-slate-500">Manage master records separately. Depot codes are matched against vehicle branch codes; route codes are matched against each vehicle's assigned route/area.</p>
       </div>
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500">Regions</p><p className="mt-1 text-2xl font-black text-slate-900">{Object.keys(DEPOTS_BY_REGION).length}</p>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500">Depots in view</p><p className="mt-1 text-2xl font-black text-slate-900">{depotRows.length}</p>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500">Vehicles loaded</p><p className="mt-1 text-2xl font-black text-slate-900">{vehicles.length}</p>
-        </div>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          {tabs.map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-3 rounded-xl px-4 py-3 text-left transition ${activeTab === tab.id ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-700 hover:bg-slate-50'}`}>
-              <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${activeTab === tab.id ? 'bg-white/15' : 'bg-slate-100 text-slate-600'}`}>{tab.icon}</span>
-              <span className="min-w-0 flex-1"><span className="block text-sm font-bold">{tab.label}</span><span className={`mt-0.5 block text-xs ${activeTab === tab.id ? 'text-blue-100' : 'text-slate-500'}`}>{tab.description}</span></span>
-              <span className={`rounded-full px-2 py-1 text-xs font-bold ${activeTab === tab.id ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-600'}`}>{tab.count}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row">
-        <label className="relative flex-1">
-          <span className="sr-only">Search region, depot, route or vehicle</span>
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search region, depot, route or vehicle…" className="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" />
-        </label>
-        <select value={regionFilter} onChange={e => { setRegionFilter(e.target.value); setDepotFilter('ALL'); }} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700">
-          <option value="ALL">All regions</option>{Object.keys(DEPOTS_BY_REGION).map(region => <option key={region} value={region}>{region}</option>)}
-        </select>
-        {activeTab === 'routes' && (
-          <select value={depotFilter} onChange={e => setDepotFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700">
-            <option value="ALL">All depots</option>{depotRows.map(row => <option key={row.depot} value={row.depot}>{row.depot}</option>)}
-          </select>
-        )}
-      </div>
-
-      {error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</div>}
-      {loading ? <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">Loading current fleet assignments…</div> : (
-        <div className="space-y-3">
-          {activeTab === 'regions' && regionRows.map(row => (
-            <button key={row.region} onClick={() => { setRegionFilter(row.region); setActiveTab('depots'); }} className="flex w-full flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-blue-200 hover:shadow-md sm:flex-row sm:items-center">
-              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><MapPin className="h-5 w-5" /></span>
-              <span className="min-w-0 flex-1"><span className="block text-base font-black text-slate-900">{row.region}</span><span className="mt-1 block text-xs text-slate-500">Select to view the depots in this region</span></span>
-              <span className="flex gap-5 sm:gap-8"><span><span className="block text-lg font-black text-slate-900">{row.depotCount}</span><span className="text-xs text-slate-500">Depots</span></span><span><span className="block text-lg font-black text-slate-900">{row.vehicleCount}</span><span className="text-xs text-slate-500">Vehicles</span></span></span>
-            </button>
-          ))}
-
-          {activeTab === 'depots' && (
-            depotRows.length ? <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <div className="grid grid-cols-[1fr_auto_auto] gap-4 border-b border-slate-100 bg-slate-50 px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-slate-500 sm:px-5"><span>Depot</span><span>Routes</span><span>Vehicles</span></div>
-              {depotRows.map(row => (
-                <button key={row.depot} onClick={() => { setDepotFilter(row.depot); setActiveTab('routes'); }} className="grid w-full grid-cols-[1fr_auto_auto] items-center gap-4 border-b border-slate-100 px-4 py-4 text-left last:border-0 hover:bg-blue-50/40 sm:px-5">
-                  <span><span className="block font-black text-slate-900">{row.depot}</span><span className="mt-1 block text-xs text-slate-500">{row.region} region</span></span>
-                  <span className="text-sm font-semibold text-slate-700">{row.routeCount}</span>
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-700">{row.vehicles.length}</span>
-                </button>
-              ))}
-            </div> : <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">No depots match the current filters.</div>
-          )}
-
-          {activeTab === 'routes' && (
-            routeRows.length ? <div className="space-y-3">
-              {routeRows.map(row => (
-                <section key={`${row.depot}-${row.route}`} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <header className="flex flex-col gap-2 border-b border-slate-100 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-                    <div className="flex items-center gap-3"><span className="rounded-lg bg-blue-50 p-2 text-blue-700"><RouteIcon className="h-4 w-4" /></span><div><h3 className="font-black text-slate-900">{row.route}</h3><p className="text-xs text-slate-500">{row.region} · Depot {row.depot}</p></div></div>
-                    <span className="text-xs font-bold text-slate-600">{row.vehicles.length} assigned vehicle{row.vehicles.length === 1 ? '' : 's'}</span>
-                  </header>
-                  <div className="flex flex-wrap gap-2 p-4">{row.vehicles.map(vehicle => <span key={vehicle.vehicleNo} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700"><Truck className="h-3.5 w-3.5 text-slate-400" />{vehicle.vehicleNo}</span>)}</div>
-                </section>
-              ))}
-            </div> : <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">No routes or vehicle assignments match the current filters.</div>
-          )}
-        </div>
-      )}
-
-      <p className="text-xs text-slate-400">Note: route groups are derived from each vehicle’s assignedRoute/area field. This screen does not create a separate route record, so routes without assigned vehicles are not stored independently.</p>
+      <button onClick={() => void load()} disabled={loading || saving} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
     </div>
-  );
+
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {[{label:'Regions',value:structure.regions.length},{label:'Registered depots',value:structure.depots.length},{label:'Vehicles',value:vehicles.length}].map(k => <div key={k.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-semibold text-slate-500">{k.label}</p><p className="mt-1 text-2xl font-black text-slate-900">{k.value}</p></div>)}
+    </div>
+
+    <div className="rounded-2xl border border-slate-200 bg-white p-2 shadow-sm"><div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+      {tabs.map(t => <button key={t.id} onClick={() => { setActiveTab(t.id); setError(''); }} className={`flex items-center gap-3 rounded-xl px-4 py-3 text-left ${activeTab === t.id ? 'bg-blue-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}>
+        <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${activeTab === t.id ? 'bg-white/15' : 'bg-slate-100 text-slate-600'}`}>{t.icon}</span>
+        <span className="min-w-0 flex-1"><span className="block text-sm font-bold">{t.label}</span><span className="block text-xs opacity-75">Create, edit and delete</span></span><span className="rounded-full bg-black/5 px-2 py-1 text-xs font-bold">{t.count}</span>
+      </button>)}
+    </div></div>
+
+    <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row">
+      <label className="relative flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${activeTab}…`} className="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" /></label>
+      {activeTab !== 'regions' && <select value={regionFilter} onChange={e => { setRegionFilter(e.target.value); setDepotFilter('ALL'); }} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"><option value="ALL">All regions</option>{structure.regions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select>}
+      {activeTab === 'routes' && <select value={depotFilter} onChange={e => setDepotFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"><option value="ALL">All depots</option>{structure.depots.filter(d => regionFilter === 'ALL' || d.regionId === regionFilter).map(d => <option key={d.id} value={d.id}>{d.code} · {d.name}</option>)}</select>}
+      <button onClick={() => openCreate(activeTab === 'regions' ? 'region' : activeTab === 'depots' ? 'depot' : 'route', activeTab === 'depots' ? structure.regions[0]?.id || '' : activeTab === 'routes' ? structure.depots[0]?.id || '' : '')} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700"><Plus className="h-4 w-4" />Add {activeTab === 'regions' ? 'region' : activeTab === 'depots' ? 'depot' : 'route'}</button>
+    </div>
+
+    {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</div>}
+    {error && <div role="alert" className="flex gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div>}
+
+    {unregisteredDepotCodes.length > 0 && activeTab === 'depots' && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+      <h3 className="font-bold text-amber-900">Vehicle depots not mapped yet ({unregisteredDepotCodes.length})</h3><p className="mt-1 text-xs text-amber-800">These codes exist in real vehicle records but do not have a Region/Depot master record. Register each one to fix the mismatch.</p>
+      <div className="mt-3 flex flex-wrap gap-2">{unregisteredDepotCodes.map(code => <button key={code} onClick={() => registerExistingDepot(code)} className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100">+ Register {code}</button>)}</div>
+    </div>}
+
+    {loading ? <div className="rounded-2xl bg-white p-10 text-center text-sm text-slate-500">Loading saved master records…</div> : <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      {activeTab === 'regions' && <>{visibleRegions.map(r => <div key={r.id} className="flex items-center gap-3 border-b border-slate-100 p-4 last:border-0"><MapPin className="h-5 w-5 text-blue-600" /><div className="min-w-0 flex-1"><p className="font-bold text-slate-900">{r.name}</p><p className="text-xs text-slate-500">{structure.depots.filter(d => d.regionId === r.id).length} depots</p></div><button onClick={() => openEdit('region', r)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" title="Edit region"><Pencil className="h-4 w-4" /></button><button onClick={() => void remove('region', r)} className="rounded-lg p-2 text-rose-600 hover:bg-rose-50" title="Delete region"><Trash2 className="h-4 w-4" /></button></div>)}{!visibleRegions.length && <p className="p-8 text-center text-sm text-slate-500">No regions yet. Add a region to begin.</p>}</>}
+      {activeTab === 'depots' && <>{visibleDepots.map(d => <div key={d.id} className="flex items-center gap-3 border-b border-slate-100 p-4 last:border-0"><Building2 className="h-5 w-5 text-blue-600" /><div className="min-w-0 flex-1"><p className="font-bold text-slate-900">{d.code} · {d.name}</p><p className="text-xs text-slate-500">{structure.regions.find(r => r.id === d.regionId)?.name || 'Invalid region mapping'} · {vehicles.filter(v => getDepotCode(v) === norm(d.code)).length} vehicle(s)</p></div><button onClick={() => openEdit('depot', d)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" title="Edit depot"><Pencil className="h-4 w-4" /></button><button onClick={() => void remove('depot', d)} className="rounded-lg p-2 text-rose-600 hover:bg-rose-50" title="Delete depot"><Trash2 className="h-4 w-4" /></button></div>)}{!visibleDepots.length && <p className="p-8 text-center text-sm text-slate-500">No depots match this filter.</p>}</>}
+      {activeTab === 'routes' && <>{visibleRoutes.map(r => { const d = structure.depots.find(x => x.id === r.depotId); const assigned = vehicles.filter(v => getRouteCode(v) === norm(r.code) && (!d || getDepotCode(v) === norm(d.code))); return <div key={r.id} className="flex items-center gap-3 border-b border-slate-100 p-4 last:border-0"><RouteIcon className="h-5 w-5 text-blue-600" /><div className="min-w-0 flex-1"><p className="font-bold text-slate-900">{r.code} · {r.name}</p><p className="text-xs text-slate-500">Depot {d?.code || 'Unknown'} · {assigned.length} matching vehicle(s)</p>{assigned.length > 0 && <p className="mt-1 text-xs text-slate-500">{assigned.map(v => v.vehicleNo).join(', ')}</p>}</div><button onClick={() => openEdit('route', r)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" title="Edit route"><Pencil className="h-4 w-4" /></button><button onClick={() => void remove('route', r)} className="rounded-lg p-2 text-rose-600 hover:bg-rose-50" title="Delete route"><Trash2 className="h-4 w-4" /></button></div>})}{!visibleRoutes.length && <p className="p-8 text-center text-sm text-slate-500">No routes match this filter.</p>}
+        <div className="border-t border-slate-100 bg-slate-50 p-4"><p className="text-xs font-bold text-slate-700">Existing vehicle route values (legacy assignments)</p><div className="mt-2 flex flex-wrap gap-2">{Array.from(routeAssignments.entries()).map(([key, assigned]) => <span key={key} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600">{key.replace('::', ' / ')} · {assigned.length} vehicle(s)</span>)}</div></div>
+      </>}
+    </div>}
+
+    {formKind && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" role="dialog" aria-modal="true"><form onSubmit={submitForm} className="w-full max-w-lg space-y-4 rounded-2xl bg-white p-5 shadow-xl sm:p-6">
+      <div className="flex items-center justify-between"><div><h3 className="text-lg font-black text-slate-900">{form.id ? 'Edit' : 'Add'} {formKind}</h3><p className="text-xs text-slate-500">Changes are saved to the server's organization settings.</p></div><button type="button" onClick={() => setFormKind(null)} className="rounded-lg p-2 hover:bg-slate-100"><X className="h-4 w-4" /></button></div>
+      <label className="block space-y-1"><span className="text-xs font-bold text-slate-600">{formKind === 'region' ? 'Region name' : 'Name'}</span><input autoFocus required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-400" placeholder={formKind === 'region' ? 'e.g. CENTRAL' : formKind === 'depot' ? 'e.g. Balakong Depot' : 'e.g. Balakong Route 01'} /></label>
+      {formKind !== 'region' && <label className="block space-y-1"><span className="text-xs font-bold text-slate-600">{formKind === 'depot' ? 'Depot code (must match vehicle branch)' : 'Route code (must match assigned route/area)'}</span><input required value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-400" placeholder={formKind === 'depot' ? 'e.g. BL' : 'e.g. BL01'} /></label>}
+      {formKind === 'depot' && <label className="block space-y-1"><span className="text-xs font-bold text-slate-600">Region</span><select required value={form.parentId} onChange={e => setForm(f => ({ ...f, parentId: e.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"><option value="">Select region</option>{structure.regions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>}
+      {formKind === 'route' && <label className="block space-y-1"><span className="text-xs font-bold text-slate-600">Depot</span><select required value={form.parentId} onChange={e => setForm(f => ({ ...f, parentId: e.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"><option value="">Select depot</option>{structure.depots.map(d => <option key={d.id} value={d.id}>{d.code} · {d.name}</option>)}</select></label>}
+      <div className="flex justify-end gap-2 border-t border-slate-100 pt-4"><button type="button" onClick={() => setFormKind(null)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600">Cancel</button><button disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"><Save className="h-4 w-4" />{saving ? 'Saving…' : 'Save changes'}</button></div>
+    </form></div>}
+  </div>;
 };
