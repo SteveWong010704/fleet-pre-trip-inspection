@@ -36,7 +36,7 @@ import QRCodeLib from 'qrcode';
 const DEPOTS_BY_REGION: Record<string, string[]> = {
   NORTHERN: ['PG', 'IP', 'MN', 'LN'],
   CENTRAL: ['KJ', 'GB', 'BL', 'KL', 'NL'],
-  EAST: ['KT', 'TR'],
+  EAST: [],
   SOUTH: ['AG', 'SB', 'JB'],
 };
 const REGION_BY_DEPOT: Record<string, string> = Object.fromEntries(
@@ -937,7 +937,7 @@ export const FleetOverview: React.FC = () => {
                     }}
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    {(DEPOTS_BY_REGION[selectedRegion] || []).map(depot => <option key={depot} value={depot}>{depot} · {vehicles.filter(v => String(v.branch || '').toUpperCase() === depot).length} vehicles</option>)}
+                    {(DEPOTS_BY_REGION[selectedRegion] || []).length === 0 ? <option value="">No depot codes configured for this region</option> : (DEPOTS_BY_REGION[selectedRegion] || []).map(depot => <option key={depot} value={depot}>{depot} · {vehicles.filter(v => String(v.branch || '').toUpperCase() === depot).length} vehicles</option>)}
                   </select>
                 </div>
                 <div className="space-y-1">
