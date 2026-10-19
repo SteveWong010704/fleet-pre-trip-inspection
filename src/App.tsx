@@ -498,7 +498,7 @@ export default function App() {
 
                 {/* Sub-Tab View Rendering */}
                 {adminTab === 'fleet' && <FleetOverview />}
-                {adminTab === 'analytics' && <DailyDepotAnalytics />
+                {adminTab === 'analytics' && <DailyDepotAnalytics />}
                 {adminTab === 'data' && <DataMaintenance />}
                 {adminTab === 'drivers' && <DriverManagement />}
                 {adminTab === 'history' && <InspectionHistory />}
