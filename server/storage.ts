@@ -1381,19 +1381,32 @@ export async function purgeDemoData(): Promise<{ success: boolean; removedVehicl
     { loginId: String(d.loginId || '').trim().toUpperCase(), name: String(d.name || '').trim().toUpperCase() },
   ]));
 
-  const demoVehicles = memoryStore.vehicles.filter(v => {
-    const expected = seededVehicles.get(String(v.vehicleNo || '').replace(/\\s+/g, '').toUpperCase());
-    return Boolean(expected && expected.cardNo && expected.chassisNo &&
-      String(v.cardNo || '').trim() === expected.cardNo &&
-      String(v.chassisNo || '').trim() === expected.chassisNo);
-  });
-  const demoDrivers = memoryStore.drivers.filter(d => {
-    const expected = seededDrivers.get(String(d.employeeId || '').trim().toUpperCase());
-    return Boolean(expected && expected.loginId === String(d.loginId || '').trim().toUpperCase() &&
-      expected.name === String(d.name || '').trim().toUpperCase());
-  });
   // Only explicitly tagged mock records are eligible; ordinary inspection history is never deleted by this action.
   const demoInspections = memoryStore.inspections.filter(i => /^(DEMO|MOCK|SEED|TEST)[-_]/i.test(String(i.id || '')));
+  const demoInspectionIds = new Set(demoInspections.map(i => i.id));
+  const preservedInspections = memoryStore.inspections.filter(i => !demoInspectionIds.has(i.id));
+  const demoVehicles = memoryStore.vehicles.filter(v => {
+    const plate = String(v.vehicleNo || '').replace(/\\s+/g, '').toUpperCase();
+    const expected = seededVehicles.get(plate);
+    const identityMatches = Boolean(expected && expected.cardNo && expected.chassisNo &&
+      String(v.cardNo || '').trim() === expected.cardNo &&
+      String(v.chassisNo || '').trim() === expected.chassisNo);
+    // Preserve a seeded vehicle if any non-demo inspection history still references it.
+    const hasPreservedHistory = preservedInspections.some(i => String(i.vehicleNo || '').replace(/\\s+/g, '').toUpperCase() === plate);
+    return identityMatches && !hasPreservedHistory;
+  });
+  const demoDrivers = memoryStore.drivers.filter(d => {
+    const employeeId = String(d.employeeId || '').trim().toUpperCase();
+    const loginId = String(d.loginId || '').trim().toUpperCase();
+    const expected = seededDrivers.get(employeeId);
+    const identityMatches = Boolean(expected && expected.loginId === loginId &&
+      expected.name === String(d.name || '').trim().toUpperCase());
+    const hasPreservedHistory = preservedInspections.some(i => {
+      const inspectionDriver = String(i.driverId || '').trim().toUpperCase();
+      return inspectionDriver === employeeId || inspectionDriver === loginId;
+    });
+    return identityMatches && !hasPreservedHistory;
+  });
 
   const vehiclePlates = new Set(demoVehicles.map(v => String(v.vehicleNo).replace(/\\s+/g, '').toUpperCase()));
   const driverIds = new Set(demoDrivers.map(d => String(d.employeeId).trim().toUpperCase()));
@@ -1402,14 +1415,15 @@ export async function purgeDemoData(): Promise<{ success: boolean; removedVehicl
   const inspectionIds = new Set(demoInspections.map(i => i.id));
   memoryStore.inspections = memoryStore.inspections.filter(i => !inspectionIds.has(i.id));
 
+  // Delete tagged inspections first to respect common SQL foreign-key relationships.
+  for (const i of demoInspections) {
+    await dbDeleteInspection(i.id).catch(e => logger.error('DEMO_PURGE', 'Failed to remove tagged mock inspection from SQL Server', e));
+  }
   for (const v of demoVehicles) {
     await dbDeleteVehicle(String(v.vehicleNo).replace(/\\s+/g, '').toUpperCase()).catch(e => logger.error('DEMO_PURGE', 'Failed to remove demo vehicle from SQL Server', e));
   }
   for (const d of demoDrivers) {
     await dbDeleteDriver(d.employeeId).catch(e => logger.error('DEMO_PURGE', 'Failed to remove demo driver from SQL Server', e));
-  }
-  for (const i of demoInspections) {
-    await dbDeleteInspection(i.id).catch(e => logger.error('DEMO_PURGE', 'Failed to remove tagged mock inspection from SQL Server', e));
   }
 
   if (demoVehicles.length || demoDrivers.length || demoInspections.length) {
@@ -1417,7 +1431,7 @@ export async function purgeDemoData(): Promise<{ success: boolean; removedVehicl
       eventType: 'DEMO_DATA_PURGED',
       operator: 'Admin',
       ip: '127.0.0.1',
-      details: `Purged identifiable legacy demo records only: ${demoVehicles.length} vehicles, ${demoDrivers.length} drivers, ${demoInspections.length} explicitly tagged mock inspections. Unmarked inspection history was preserved.`,
+      details: `Purged identifiable legacy demo records only: ${demoVehicles.length} vehicles, ${demoDrivers.length} drivers, ${demoInspections.length} explicitly tagged mock inspections. Unmarked inspection history was preserved; seeded vehicles/drivers with preserved history were retained.`,
       severity: 'warning',
     });
   }
