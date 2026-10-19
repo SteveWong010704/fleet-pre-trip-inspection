@@ -45,6 +45,8 @@ import {
   clearAllDrivers,
   getSettings,
   updateSettings,
+  getOrgStructure,
+  updateOrgStructure,
   pruneOldInspections,
   getDatabaseStatus,
 } from './server/storage';
@@ -1331,6 +1333,24 @@ async function startServer() {
       res.json({ success: true, settings: updated });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Region / Depot / Route master data. Persisted with the server's authoritative store.
+  app.get('/api/org-structure', requireAdmin, (_req, res) => {
+    try {
+      res.json({ success: true, structure: getOrgStructure() });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  app.put('/api/org-structure', requireAdmin, (req, res) => {
+    try {
+      const structure = updateOrgStructure(req.body?.structure || {});
+      res.json({ success: true, structure });
+    } catch (err: any) {
+      res.status(400).json({ success: false, message: err.message || 'Unable to save region, depot and route records.' });
     }
   });
 
