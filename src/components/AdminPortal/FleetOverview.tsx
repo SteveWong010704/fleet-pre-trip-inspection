@@ -33,6 +33,16 @@ import {
 } from 'lucide-react';
 import QRCodeLib from 'qrcode';
 
+const DEPOTS_BY_REGION: Record<string, string[]> = {
+  NORTHERN: ['PG', 'IP', 'MN', 'LN'],
+  CENTRAL: ['KJ', 'GB', 'BL', 'KL', 'NL'],
+  EAST: ['KT', 'TR'],
+  SOUTH: ['AG', 'SB', 'JB'],
+};
+const REGION_BY_DEPOT: Record<string, string> = Object.fromEntries(
+  Object.entries(DEPOTS_BY_REGION).flatMap(([region, depots]) => depots.map(depot => [depot, region]))
+);
+
 export const FleetOverview: React.FC = () => {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [stats, setStats] = useState<FleetStats | null>(null);
@@ -67,6 +77,7 @@ export const FleetOverview: React.FC = () => {
   // Edit / Create Vehicle Modal
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
   const [editMode, setEditMode] = useState<'create' | 'edit'>('create');
+  const [selectedRegion, setSelectedRegion] = useState<string>('CENTRAL');
   const [vehicleForm, setVehicleForm] = useState<Partial<Vehicle>>({
     vehicleNo: '',
     brand: 'HINO',
@@ -159,6 +170,7 @@ export const FleetOverview: React.FC = () => {
 
   const handleOpenCreateVehicle = () => {
     setEditMode('create');
+    setSelectedRegion('CENTRAL');
     const randomPlate = `VFH${Math.floor(1000 + Math.random() * 9000)}`;
     setVehicleForm({
       vehicleNo: randomPlate,
@@ -184,6 +196,7 @@ export const FleetOverview: React.FC = () => {
 
   const handleOpenEditVehicle = (v: Vehicle) => {
     setEditMode('edit');
+    setSelectedRegion(REGION_BY_DEPOT[String(v.branch || '').toUpperCase()] || 'CENTRAL');
     setVehicleForm({
       ...v,
       area: v.area || v.assignedRoute || `${v.branch || 'BL'}01`,
@@ -891,36 +904,67 @@ export const FleetOverview: React.FC = () => {
                   />
                 </div>
 
-                {/* Branch / Depot */}
+                {/* Region -> Depot -> Route cascading assignment */}
                 <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Depot Branch Code *
-                  </label>
-                  <input
-                    type="text"
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Region *</label>
+                  <select
+                    required
+                    value={selectedRegion}
+                    onChange={(e) => {
+                      const region = e.target.value;
+                      const depot = DEPOTS_BY_REGION[region]?.[0] || '';
+                      const route = vehicles.find(v => String(v.branch || '').toUpperCase() === depot);
+                      const routeName = route ? String(route.assignedRoute || route.area || `${depot}01`) : `${depot}01`;
+                      setSelectedRegion(region);
+                      setVehicleForm({ ...vehicleForm, branch: depot, area: routeName, assignedRoute: routeName });
+                    }}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {Object.keys(DEPOTS_BY_REGION).map(region => <option key={region} value={region}>{region}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Depot Branch Code *</label>
+                  <select
                     required
                     value={vehicleForm.branch || ''}
-                    onChange={(e) => setVehicleForm({ ...vehicleForm, branch: e.target.value.toUpperCase() })}
-                    placeholder="e.g. KL, BL, KJ, GB"
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-
-                {/* Area / Route */}
-                <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Assigned Route / Area (e.g. BL01, KL01)
-                  </label>
-                  <input
-                    type="text"
-                    value={vehicleForm.area || ''}
                     onChange={(e) => {
-                      const val = e.target.value.toUpperCase();
-                      setVehicleForm({ ...vehicleForm, area: val, assignedRoute: val });
+                      const depot = e.target.value;
+                      const route = vehicles.find(v => String(v.branch || '').toUpperCase() === depot);
+                      const routeName = route ? String(route.assignedRoute || route.area || `${depot}01`) : `${depot}01`;
+                      setSelectedRegion(REGION_BY_DEPOT[depot] || selectedRegion);
+                      setVehicleForm({ ...vehicleForm, branch: depot, area: routeName, assignedRoute: routeName });
                     }}
-                    placeholder="e.g. BL01, BL02, KL01"
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {(DEPOTS_BY_REGION[selectedRegion] || []).map(depot => <option key={depot} value={depot}>{depot} · {vehicles.filter(v => String(v.branch || '').toUpperCase() === depot).length} vehicles</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Assigned Route *</label>
+                  <select
+                    required
+                    value={vehicleForm.assignedRoute || vehicleForm.area || ''}
+                    onChange={(e) => {
+                      if (e.target.value === '__ADD_ROUTE__') {
+                        const entered = window.prompt('Enter the new route code/name (for example BL05):');
+                        if (entered && entered.trim()) {
+                          const route = entered.trim().toUpperCase();
+                          setVehicleForm({ ...vehicleForm, area: route, assignedRoute: route });
+                        }
+                        return;
+                      }
+                      setVehicleForm({ ...vehicleForm, area: e.target.value, assignedRoute: e.target.value });
+                    }}
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  >
+                    {Array.from(new Set([
+                      ...vehicles.filter(v => String(v.branch || '').toUpperCase() === String(vehicleForm.branch || '').toUpperCase()).map(v => String(v.assignedRoute || v.area || '').trim().toUpperCase()),
+                      String(vehicleForm.assignedRoute || vehicleForm.area || '').trim().toUpperCase(),
+                    ].filter(Boolean))).sort().map(route => <option key={route} value={route}>{route}</option>)}
+                    <option value="__ADD_ROUTE__">＋ Add New Route…</option>
+                  </select>
+                  <p className="text-[10px] text-slate-400">Route assignment is stored on the vehicle and reflected in the depot/route roster.</p>
                 </div>
 
                 {/* Vehicle Category */}
