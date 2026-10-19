@@ -498,3 +498,28 @@ export async function pruneActiveDbInspections(maxDays: number = 45): Promise<{
   });
   return await res.json();
 }
+
+
+export interface OrgStructure {
+  regions: { id: string; name: string }[];
+  depots: { id: string; code: string; name: string; regionId: string }[];
+  routes: { id: string; code: string; name: string; depotId: string }[];
+}
+
+export async function fetchOrgStructure(): Promise<OrgStructure> {
+  const res = await authFetch('/api/org-structure');
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.message || 'Unable to load organization structure');
+  return data.structure;
+}
+
+export async function saveOrgStructure(structure: OrgStructure): Promise<OrgStructure> {
+  const res = await authFetch('/api/org-structure', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ structure }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.message || 'Unable to save organization structure');
+  return data.structure;
+}
