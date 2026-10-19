@@ -140,16 +140,6 @@ export function initStore() {
         console.log(`[Storage] Configured Public QR Base URL: ${memoryStore.settings.publicBaseUrl}`);
       }
 
-      if (memoryStore.vehicles.length === 0 && memoryStore.drivers.length === 0) {
-        memoryStore.vehicles = [...INITIAL_VEHICLES];
-        memoryStore.drivers = [...INITIAL_DRIVERS];
-        memoryStore.vehicles.forEach((v) => {
-          if (!v.qrToken) v.qrToken = generateVehicleQrToken();
-        });
-        saveStore(true);
-        console.log(`[Storage] Re-seeded with ${memoryStore.vehicles.length} vehicles and ${memoryStore.drivers.length} drivers.`);
-      }
-
       // Ensure all vehicles (including legacy/existing) have a unified static QR security token
       let legacyMigrated = false;
       memoryStore.vehicles.forEach((v) => {
@@ -166,20 +156,14 @@ export function initStore() {
       // Automatically prune any inspection records older than 45 days on startup
       pruneOldInspections(45);
     } else {
-      // Clean start - initialize with preset fleet and drivers
-      memoryStore.vehicles = [...INITIAL_VEHICLES];
-      memoryStore.drivers = [...INITIAL_DRIVERS];
+      // Clean start: empty state only. Real data must be entered by an authorized import or database sync.
+      memoryStore.vehicles = [];
+      memoryStore.drivers = [];
       memoryStore.inspections = [];
       memoryStore.auditLogs = [];
       memoryStore.settings = { publicBaseUrl: envPublicUrl };
-      // Ensure all initial vehicles have static QR tokens
-      memoryStore.vehicles.forEach((v) => {
-        if (!v.qrToken || typeof v.qrToken !== 'string' || !v.qrToken.trim()) {
-          v.qrToken = generateVehicleQrToken();
-        }
-      });
       saveStore(true);
-      console.log(`[Storage] Initialized clean store with ${memoryStore.vehicles.length} preset vehicles and ${memoryStore.drivers.length} drivers.`);
+      console.log('[Storage] Initialized an empty store. No demo data was seeded.');
     }
 
     // Connect to Microsoft SQL Server (SSMS) and synchronize data
@@ -1386,6 +1370,70 @@ export function clearAllInspections(): void {
   }));
   saveStore();
   dbClearInspections().catch(e => console.error('[MSSQL Error] clearInspections:', e));
+}
+
+
+// Remove only rows that can be positively identified as the legacy seed records.
+// Real records are preserved unless their full stable identity matches the bundled legacy seed identity.
+export async function purgeDemoData(): Promise<{ success: boolean; removedVehicles: number; removedDrivers: number; removedMockInspections: number; message: string }> {
+  const seededVehicles = new Map(INITIAL_VEHICLES.map(v => [
+    String(v.vehicleNo || '').replace(/\\s+/g, '').toUpperCase(),
+    { cardNo: String(v.cardNo || '').trim(), chassisNo: String(v.chassisNo || '').trim() },
+  ]));
+  const seededDrivers = new Map(INITIAL_DRIVERS.map(d => [
+    String(d.employeeId || '').trim().toUpperCase(),
+    { loginId: String(d.loginId || '').trim().toUpperCase(), name: String(d.name || '').trim().toUpperCase() },
+  ]));
+
+  const demoVehicles = memoryStore.vehicles.filter(v => {
+    const expected = seededVehicles.get(String(v.vehicleNo || '').replace(/\\s+/g, '').toUpperCase());
+    return Boolean(expected && expected.cardNo && expected.chassisNo &&
+      String(v.cardNo || '').trim() === expected.cardNo &&
+      String(v.chassisNo || '').trim() === expected.chassisNo);
+  });
+  const demoDrivers = memoryStore.drivers.filter(d => {
+    const expected = seededDrivers.get(String(d.employeeId || '').trim().toUpperCase());
+    return Boolean(expected && expected.loginId === String(d.loginId || '').trim().toUpperCase() &&
+      expected.name === String(d.name || '').trim().toUpperCase());
+  });
+  // Only explicitly tagged mock records are eligible; ordinary inspection history is never deleted by this action.
+  const demoInspections = memoryStore.inspections.filter(i => /^(DEMO|MOCK|SEED|TEST)[-_]/i.test(String(i.id || '')));
+
+  const vehiclePlates = new Set(demoVehicles.map(v => String(v.vehicleNo).replace(/\\s+/g, '').toUpperCase()));
+  const driverIds = new Set(demoDrivers.map(d => String(d.employeeId).trim().toUpperCase()));
+  memoryStore.vehicles = memoryStore.vehicles.filter(v => !vehiclePlates.has(String(v.vehicleNo || '').replace(/\\s+/g, '').toUpperCase()));
+  memoryStore.drivers = memoryStore.drivers.filter(d => !driverIds.has(String(d.employeeId || '').trim().toUpperCase()));
+  const inspectionIds = new Set(demoInspections.map(i => i.id));
+  memoryStore.inspections = memoryStore.inspections.filter(i => !inspectionIds.has(i.id));
+
+  for (const v of demoVehicles) {
+    await dbDeleteVehicle(String(v.vehicleNo).replace(/\\s+/g, '').toUpperCase()).catch(e => logger.error('DEMO_PURGE', 'Failed to remove demo vehicle from SQL Server', e));
+  }
+  for (const d of demoDrivers) {
+    await dbDeleteDriver(d.employeeId).catch(e => logger.error('DEMO_PURGE', 'Failed to remove demo driver from SQL Server', e));
+  }
+  for (const i of demoInspections) {
+    await dbDeleteInspection(i.id).catch(e => logger.error('DEMO_PURGE', 'Failed to remove tagged mock inspection from SQL Server', e));
+  }
+
+  if (demoVehicles.length || demoDrivers.length || demoInspections.length) {
+    addAuditLog({
+      eventType: 'DEMO_DATA_PURGED',
+      operator: 'Admin',
+      ip: '127.0.0.1',
+      details: `Purged identifiable legacy demo records only: ${demoVehicles.length} vehicles, ${demoDrivers.length} drivers, ${demoInspections.length} explicitly tagged mock inspections. Unmarked inspection history was preserved.`,
+      severity: 'warning',
+    });
+  }
+  invalidateFleetStatsCache();
+  saveStore(true);
+  return {
+    success: true,
+    removedVehicles: demoVehicles.length,
+    removedDrivers: demoDrivers.length,
+    removedMockInspections: demoInspections.length,
+    message: `Removed ${demoVehicles.length} identified demo vehicles, ${demoDrivers.length} identified demo drivers and ${demoInspections.length} tagged mock inspections. Unmarked inspection history was preserved.`,
+  };
 }
 
 // Full fleet database wipe - resets to 100% clean state
