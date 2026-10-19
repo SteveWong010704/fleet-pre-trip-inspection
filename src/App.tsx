@@ -15,6 +15,7 @@ import { QrCodeGenerator } from './components/AdminPortal/QrCodeGenerator';
 import { AuditLogViewer } from './components/AdminPortal/AuditLogViewer';
 import { BackupRetentionManager } from './components/AdminPortal/BackupRetentionManager';
 import { DailyDepotAnalytics } from './components/AdminPortal/DailyDepotAnalytics';
+import { ExecutiveDashboard } from './components/AdminPortal/ExecutiveDashboard';
 import { DataMaintenance } from './components/AdminPortal/DataMaintenance';
 import { RouteDepotManagement } from './components/AdminPortal/RouteDepotManagement';
 import { fetchVehicleByPlate, checkDriverDailyInspection, checkVehicleDailyInspection, clearAuthToken } from './lib/api';
@@ -35,7 +36,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'driver' | 'admin'>(() => {
     return isDriverQrScan() ? 'driver' : 'admin';
   });
-  const [adminTab, setAdminTab] = useState<'fleet' | 'analytics' | 'routes' | 'drivers' | 'history' | 'bulk' | 'qr' | 'logs' | 'backup' | 'data'>('fleet');
+  const [adminTab, setAdminTab] = useState<'fleet' | 'analytics' | 'executive' | 'routes' | 'drivers' | 'history' | 'bulk' | 'qr' | 'logs' | 'backup' | 'data'>('fleet');
 
   // Admin Auth State (session persisted so refresh on 192.168.1.80 maintains admin session)
   const [activeAdmin, setActiveAdmin] = useState<AdminUser | null>(() => {
@@ -427,6 +428,16 @@ export default function App() {
                   </button>
 
                   <button
+                    onClick={() => setAdminTab('executive')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                      adminTab === 'executive' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    <BarChart3 className="w-4 h-4" />
+                    <span>Executive Analysis</span>
+                  </button>
+
+                  <button
                     onClick={() => setAdminTab('routes')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'routes' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -510,6 +521,7 @@ export default function App() {
                 {/* Sub-Tab View Rendering */}
                 {adminTab === 'fleet' && <FleetOverview />}
                 {adminTab === 'analytics' && <DailyDepotAnalytics />}
+                {adminTab === 'executive' && <ExecutiveDashboard />}
                 {adminTab === 'routes' && <RouteDepotManagement />}
                 {adminTab === 'data' && <DataMaintenance />}
                 {adminTab === 'drivers' && <DriverManagement />}
