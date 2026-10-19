@@ -100,6 +100,11 @@ export const RouteDepotManagement: React.FC = () => {
       if (!code) { setError('Depot code is required.'); return; }
       if (!form.parentId || !next.regions.some(r => r.id === form.parentId)) { setError('Select a valid region.'); return; }
       if (next.depots.some(d => d.id !== form.id && d.code.toUpperCase() === code)) { setError('Depot code already exists.'); return; }
+      const oldDepot = form.id ? next.depots.find(d => d.id === form.id) : undefined;
+      if (oldDepot && oldDepot.code.toUpperCase() !== code && vehicles.some(v => getDepotCode(v) === oldDepot.code.toUpperCase())) {
+        setError('This depot code is used by existing vehicle records. Keep the code unchanged; you may edit the depot name or region. Reassign vehicles first before changing the code.');
+        return;
+      }
       const item = { id: entityId, code, name: form.name.trim(), regionId: form.parentId };
       next.depots = form.id ? next.depots.map(d => d.id === form.id ? item : d) : [...next.depots, item];
     } else if (formKind === 'route') {
@@ -107,6 +112,14 @@ export const RouteDepotManagement: React.FC = () => {
       if (!code) { setError('Route code is required.'); return; }
       if (!form.parentId || !next.depots.some(d => d.id === form.parentId)) { setError('Select a valid depot.'); return; }
       if (next.routes.some(r => r.id !== form.id && r.code.toUpperCase() === code)) { setError('Route code already exists.'); return; }
+      const oldRoute = form.id ? next.routes.find(r => r.id === form.id) : undefined;
+      if (oldRoute) {
+        const assigned = vehicles.filter(v => getRouteCode(v) === oldRoute.code.toUpperCase());
+        if (assigned.length && (oldRoute.code.toUpperCase() !== code || oldRoute.depotId !== form.parentId)) {
+          setError('This route is used by existing vehicle records. Keep its code and depot unchanged; you may edit the route name. Reassign vehicles first before changing its code or depot.');
+          return;
+        }
+      }
       const item = { id: entityId, code, name: form.name.trim(), depotId: form.parentId };
       next.routes = form.id ? next.routes.map(r => r.id === form.id ? item : r) : [...next.routes, item];
     }
