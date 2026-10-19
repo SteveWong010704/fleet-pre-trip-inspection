@@ -185,6 +185,47 @@ export async function connectMssql(): Promise<boolean> {
       console.warn('[MSSQL Migration Warning] Non-critical schema migration check:', migErr);
     }
 
+    // Region / Depot / Route master tables are authoritative in SQL Server.
+    await pool.request().query`
+      IF OBJECT_ID('dbo.FleetRegions', 'U') IS NULL
+      BEGIN
+        CREATE TABLE dbo.FleetRegions (
+          RegionId NVARCHAR(100) NOT NULL PRIMARY KEY,
+          RegionName NVARCHAR(150) NOT NULL,
+          CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_FleetRegions_CreatedAt DEFAULT SYSUTCDATETIME(),
+          UpdatedAt DATETIME2 NOT NULL CONSTRAINT DF_FleetRegions_UpdatedAt DEFAULT SYSUTCDATETIME()
+        );
+      END;
+
+      IF OBJECT_ID('dbo.FleetDepots', 'U') IS NULL
+      BEGIN
+        CREATE TABLE dbo.FleetDepots (
+          DepotId NVARCHAR(100) NOT NULL PRIMARY KEY,
+          DepotCode NVARCHAR(50) NOT NULL,
+          DepotName NVARCHAR(150) NOT NULL,
+          RegionId NVARCHAR(100) NOT NULL,
+          CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_FleetDepots_CreatedAt DEFAULT SYSUTCDATETIME(),
+          UpdatedAt DATETIME2 NOT NULL CONSTRAINT DF_FleetDepots_UpdatedAt DEFAULT SYSUTCDATETIME(),
+          CONSTRAINT UQ_FleetDepots_Code UNIQUE (DepotCode),
+          CONSTRAINT FK_FleetDepots_Regions FOREIGN KEY (RegionId) REFERENCES dbo.FleetRegions(RegionId)
+        );
+      END;
+
+      IF OBJECT_ID('dbo.FleetRoutes', 'U') IS NULL
+      BEGIN
+        CREATE TABLE dbo.FleetRoutes (
+          RouteId NVARCHAR(100) NOT NULL PRIMARY KEY,
+          RouteCode NVARCHAR(50) NOT NULL,
+          RouteName NVARCHAR(150) NOT NULL,
+          DepotId NVARCHAR(100) NOT NULL,
+          CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_FleetRoutes_CreatedAt DEFAULT SYSUTCDATETIME(),
+          UpdatedAt DATETIME2 NOT NULL CONSTRAINT DF_FleetRoutes_UpdatedAt DEFAULT SYSUTCDATETIME(),
+          CONSTRAINT UQ_FleetRoutes_Code UNIQUE (RouteCode),
+          CONSTRAINT FK_FleetRoutes_Depots FOREIGN KEY (DepotId) REFERENCES dbo.FleetDepots(DepotId)
+        );
+      END;
+    `;
+
     // Verify tables exist
     const testResult = await pool.request().query`
       SELECT 
@@ -911,5 +952,69 @@ export async function dbSaveAuditLog(log: AuditLog): Promise<void> {
     `;
   } catch (err) {
     console.error(`[MSSQL Error] dbSaveAuditLog failed for ${log.id}:`, err);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Database Operations: REGION / DEPOT / ROUTE MASTER DATA
+// ----------------------------------------------------------------------------
+export interface SqlOrgStructure {
+  regions: { id: string; name: string }[];
+  depots: { id: string; code: string; name: string; regionId: string }[];
+  routes: { id: string; code: string; name: string; depotId: string }[];
+}
+
+export async function dbLoadOrgStructure(): Promise<SqlOrgStructure> {
+  if (!isMssqlConnected() || !pool) {
+    throw new Error('SQL Server is not connected. Region, depot and route records are only stored in SQL Server; check the MSSQL connection before retrying.');
+  }
+  const [regions, depots, routes] = await Promise.all([
+    pool.request().query`SELECT RegionId AS id, RegionName AS name FROM dbo.FleetRegions ORDER BY RegionName`,
+    pool.request().query`SELECT DepotId AS id, DepotCode AS code, DepotName AS name, RegionId AS regionId FROM dbo.FleetDepots ORDER BY DepotCode`,
+    pool.request().query`SELECT RouteId AS id, RouteCode AS code, RouteName AS name, DepotId AS depotId FROM dbo.FleetRoutes ORDER BY RouteCode`,
+  ]);
+  return { regions: regions.recordset, depots: depots.recordset, routes: routes.recordset };
+}
+
+export async function dbSaveOrgStructure(structure: SqlOrgStructure): Promise<SqlOrgStructure> {
+  if (!isMssqlConnected() || !pool) {
+    throw new Error('SQL Server is not connected. Nothing was saved. Region, depot and route records will not be written to JSON.');
+  }
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin();
+  try {
+    // Full replacement is transactional: if any validation/constraint fails, previous master data remains intact.
+    await new sql.Request(transaction).query`
+      DELETE FROM dbo.FleetRoutes;
+      DELETE FROM dbo.FleetDepots;
+      DELETE FROM dbo.FleetRegions;
+    `;
+    for (const r of structure.regions) {
+      await new sql.Request(transaction)
+        .input('id', sql.NVarChar(100), r.id)
+        .input('name', sql.NVarChar(150), r.name)
+        .query`INSERT INTO dbo.FleetRegions (RegionId, RegionName) VALUES (@id, @name)`;
+    }
+    for (const d of structure.depots) {
+      await new sql.Request(transaction)
+        .input('id', sql.NVarChar(100), d.id)
+        .input('code', sql.NVarChar(50), d.code)
+        .input('name', sql.NVarChar(150), d.name)
+        .input('regionId', sql.NVarChar(100), d.regionId)
+        .query`INSERT INTO dbo.FleetDepots (DepotId, DepotCode, DepotName, RegionId) VALUES (@id, @code, @name, @regionId)`;
+    }
+    for (const r of structure.routes) {
+      await new sql.Request(transaction)
+        .input('id', sql.NVarChar(100), r.id)
+        .input('code', sql.NVarChar(50), r.code)
+        .input('name', sql.NVarChar(150), r.name)
+        .input('depotId', sql.NVarChar(100), r.depotId)
+        .query`INSERT INTO dbo.FleetRoutes (RouteId, RouteCode, RouteName, DepotId) VALUES (@id, @code, @name, @depotId)`;
+    }
+    await transaction.commit();
+    return structure;
+  } catch (error) {
+    try { await transaction.rollback(); } catch { /* keep the original database error */ }
+    throw error;
   }
 }
