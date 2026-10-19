@@ -190,25 +190,21 @@ export function initStore() {
               if (mssqlTokenMigrated > 0) {
                 console.log(`[Storage] Auto-generated static QR security tokens for ${mssqlTokenMigrated} vehicles in SQL Server.`);
               }
-            } else if (memoryStore.vehicles.length > 0) {
-              console.log(`[MSSQL Auto-Sync] SQL Server Vehicles table is empty, auto-pushing ${memoryStore.vehicles.length} local vehicles to SQL Server...`);
-              await dbBulkSaveVehicles(memoryStore.vehicles);
+            } else {
+              // SQL Server is authoritative when enabled. Never re-seed an empty table from a stale local JSON cache.
+              memoryStore.vehicles = [];
             }
 
             if (dbD.length > 0) {
               memoryStore.drivers = dbD;
-            } else if (memoryStore.drivers.length > 0) {
-              console.log(`[MSSQL Auto-Sync] SQL Server Drivers table is empty, auto-pushing ${memoryStore.drivers.length} local drivers to SQL Server...`);
-              await dbBulkSaveDrivers(memoryStore.drivers);
+            } else {
+              memoryStore.drivers = [];
             }
 
             if (dbI.length > 0) {
               memoryStore.inspections = dbI;
-            } else if (memoryStore.inspections.length > 0) {
-              console.log(`[MSSQL Auto-Sync] SQL Server Inspections table is empty, auto-pushing ${memoryStore.inspections.length} local inspections to SQL Server...`);
-              for (const insp of memoryStore.inspections) {
-                await dbSaveInspection(insp);
-              }
+            } else {
+              memoryStore.inspections = [];
             }
             if (dbA.length > 0) memoryStore.auditLogs = dbA;
             console.log(`[MSSQL Sync] Successfully synchronized with SQL Server: ${memoryStore.vehicles.length} Vehicles, ${memoryStore.drivers.length} Drivers, ${memoryStore.inspections.length} Inspections.`);
