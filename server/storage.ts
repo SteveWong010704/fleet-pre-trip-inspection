@@ -25,6 +25,8 @@ import {
   dbClearDrivers,
   dbClearVehicles,
   dbClearInspections,
+  dbLoadOrgStructure,
+  dbSaveOrgStructure,
 } from './mssql';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -1938,32 +1940,32 @@ export interface OrgStructure {
   routes: { id: string; code: string; name: string; depotId: string }[];
 }
 
-export function getOrgStructure(): OrgStructure {
-  const saved = memoryStore.settings?.orgStructure;
-  return saved ? {
-    regions: Array.isArray(saved.regions) ? saved.regions : [],
-    depots: Array.isArray(saved.depots) ? saved.depots : [],
-    routes: Array.isArray(saved.routes) ? saved.routes : [],
-  } : { regions: [], depots: [], routes: [] };
+export async function getOrgStructure(): Promise<OrgStructure> {
+  if (process.env.DB_TYPE === 'json') {
+    throw new Error('Region, depot and route master data require SQL Server. Set DB_TYPE to MSSQL and ensure the database connection is available.');
+  }
+  return dbLoadOrgStructure();
 }
 
-export function updateOrgStructure(structure: OrgStructure): OrgStructure {
+export async function updateOrgStructure(structure: OrgStructure): Promise<OrgStructure> {
+  if (process.env.DB_TYPE === 'json') {
+    throw new Error('Refusing to save region, depot or route master data to JSON. Configure SQL Server first.');
+  }
   const clean = {
     regions: (structure.regions || []).map(x => ({ id: String(x.id || '').trim(), name: String(x.name || '').trim() })).filter(x => x.id && x.name),
     depots: (structure.depots || []).map(x => ({ id: String(x.id || '').trim(), code: String(x.code || '').trim().toUpperCase(), name: String(x.name || '').trim(), regionId: String(x.regionId || '').trim() })).filter(x => x.id && x.code && x.name && x.regionId),
     routes: (structure.routes || []).map(x => ({ id: String(x.id || '').trim(), code: String(x.code || '').trim().toUpperCase(), name: String(x.name || '').trim(), depotId: String(x.depotId || '').trim() })).filter(x => x.id && x.code && x.name && x.depotId),
   };
   if (new Set(clean.regions.map(x => x.id)).size !== clean.regions.length) throw new Error('Duplicate region IDs are not allowed.');
+  if (new Set(clean.depots.map(x => x.id)).size !== clean.depots.length) throw new Error('Duplicate depot codes are not allowed.');
+  if (new Set(clean.routes.map(x => x.id)).size !== clean.routes.length) throw new Error('Duplicate route IDs are not allowed.');
   if (new Set(clean.depots.map(x => x.code)).size !== clean.depots.length) throw new Error('Duplicate depot codes are not allowed.');
   if (new Set(clean.routes.map(x => x.code)).size !== clean.routes.length) throw new Error('Duplicate route codes are not allowed.');
   const regionIds = new Set(clean.regions.map(x => x.id));
   const depotIds = new Set(clean.depots.map(x => x.id));
   if (clean.depots.some(x => !regionIds.has(x.regionId))) throw new Error('Every depot must belong to an existing region.');
   if (clean.routes.some(x => !depotIds.has(x.depotId))) throw new Error('Every route must belong to an existing depot.');
-  if (!memoryStore.settings) memoryStore.settings = {};
-  memoryStore.settings.orgStructure = clean;
-  saveStore();
-  return clean;
+  return dbSaveOrgStructure(clean);
 }
 
 export function getSettings() {
