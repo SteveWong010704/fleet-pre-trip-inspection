@@ -1337,20 +1337,22 @@ async function startServer() {
   });
 
   // Region / Depot / Route master data. Persisted with the server's authoritative store.
-  app.get('/api/org-structure', requireAdmin, (_req, res) => {
+  app.get('/api/org-structure', requireAdmin, async (_req, res) => {
     try {
-      res.json({ success: true, structure: getOrgStructure() });
+      const structure = await getOrgStructure();
+      res.json({ success: true, structure, dataSource: 'MSSQL' });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      res.status(503).json({ success: false, message: err.message || 'SQL Server organization tables are unavailable.' });
     }
   });
 
-  app.put('/api/org-structure', requireAdmin, (req, res) => {
+  app.put('/api/org-structure', requireAdmin, async (req, res) => {
     try {
-      const structure = updateOrgStructure(req.body?.structure || {});
-      res.json({ success: true, structure });
+      const structure = await updateOrgStructure(req.body?.structure || {});
+      res.json({ success: true, structure, dataSource: 'MSSQL' });
     } catch (err: any) {
-      res.status(400).json({ success: false, message: err.message || 'Unable to save region, depot and route records.' });
+      const message = err.message || 'Unable to save region, depot and route records to SQL Server.';
+      res.status(/SQL Server|MSSQL|database|connected/i.test(message) ? 503 : 400).json({ success: false, message });
     }
   });
 
