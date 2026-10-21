@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Vehicle, FleetStats } from '../../types';
-import { fetchVehicles, fetchStats, updateVehicleStatus, updateVehicle, createVehicle, deleteVehicle, regenerateVehicleQrToken } from '../../lib/api';
+import { Vehicle, FleetStats, DepotItem, RouteItem, RegionItem } from '../../types';
+import { fetchVehicles, fetchStats, updateVehicleStatus, updateVehicle, createVehicle, deleteVehicle, regenerateVehicleQrToken, fetchDepots, fetchRoutes, fetchRegions } from '../../lib/api';
 import { exportVehiclesToCsv } from '../../lib/csvParser';
 import { buildVehicleDeepLink, getPublicBaseUrl } from '../../lib/publicUrl';
 import {
@@ -39,8 +39,12 @@ export const FleetOverview: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [masterDepots, setMasterDepots] = useState<DepotItem[]>([]);
+  const [masterRoutes, setMasterRoutes] = useState<RouteItem[]>([]);
+  const [masterRegions, setMasterRegions] = useState<RegionItem[]>([]);
 
   // Filters for Real-time Completion Rate & Fleet
+  const [selectedRegion, setSelectedRegion] = useState<string>('ALL');
   const [selectedBranch, setSelectedBranch] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
@@ -117,7 +121,7 @@ export const FleetOverview: React.FC = () => {
     else setIsRefreshing(true);
 
     try {
-      const [vList, sData] = await Promise.all([
+      const [vList, sData, mDeps, mRts, mRegs] = await Promise.all([
         fetchVehicles({
           branch: selectedBranch,
           status: selectedStatus,
@@ -128,9 +132,15 @@ export const FleetOverview: React.FC = () => {
           date: selectedDate,
           truckCategory: selectedCategory,
         }),
+        fetchDepots().catch(() => [] as DepotItem[]),
+        fetchRoutes().catch(() => [] as RouteItem[]),
+        fetchRegions().catch(() => [] as RegionItem[]),
       ]);
       setVehicles(vList);
       setStats(sData);
+      if (mDeps && mDeps.length > 0) setMasterDepots(mDeps);
+      if (mRts && mRts.length > 0) setMasterRoutes(mRts);
+      if (mRegs && mRegs.length > 0) setMasterRegions(mRegs);
       setLastUpdated(new Date());
     } catch (err) {
       console.error('Failed to fetch real-time fleet data:', err);
@@ -266,8 +276,20 @@ export const FleetOverview: React.FC = () => {
     link.click();
   };
 
-  // Available Filter Options
-  const depots = Array.from(new Set(vehicles.map(v => v.branch))).filter(Boolean).sort();
+  // Available Filter Options (combining master depots with registered vehicle branches, filtered by region if selected)
+  const depots = useMemo(() => {
+    const list = new Set<string>();
+    masterDepots
+      .filter(d => selectedRegion === 'ALL' || d.regionId === selectedRegion)
+      .forEach(d => list.add(d.code));
+    vehicles.forEach(v => {
+      const vReg = v.region || (masterDepots.find(d => d.code === v.branch)?.regionId) || 'CENTRAL';
+      if ((selectedRegion === 'ALL' || vReg === selectedRegion) && v.branch) {
+        list.add(v.branch.toUpperCase());
+      }
+    });
+    return Array.from(list).filter(Boolean).sort();
+  }, [masterDepots, vehicles, selectedRegion]);
   
   // Window Pagination State
   const [pageSize, setPageSize] = useState<number>(15);
@@ -275,6 +297,8 @@ export const FleetOverview: React.FC = () => {
 
   const filteredVehicles = useMemo(() => {
     return vehicles.filter(v => {
+      const vReg = v.region || (masterDepots.find(d => d.code === v.branch)?.regionId) || 'CENTRAL';
+      if (selectedRegion !== 'ALL' && vReg !== selectedRegion) return false;
       const vCat = v.truckCategory || (v.model && v.model.toLowerCase().includes('feeder') ? 'Feeder' : 'Small Truck');
       if (selectedCategory !== 'ALL' && vCat !== selectedCategory) return false;
       if (!search) return true;
@@ -284,10 +308,11 @@ export const FleetOverview: React.FC = () => {
         v.brand.toLowerCase().includes(q) ||
         v.model.toLowerCase().includes(q) ||
         (v.cardNo && v.cardNo.toLowerCase().includes(q)) ||
-        (v.area && v.area.toLowerCase().includes(q))
+        (v.area && v.area.toLowerCase().includes(q)) ||
+        (v.branch && v.branch.toLowerCase().includes(q))
       );
     });
-  }, [vehicles, selectedCategory, search]);
+  }, [vehicles, selectedRegion, selectedCategory, search, masterDepots]);
 
   const totalPages = Math.ceil(filteredVehicles.length / pageSize) || 1;
   const paginatedVehicles = useMemo(() => {
@@ -298,7 +323,7 @@ export const FleetOverview: React.FC = () => {
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, selectedBranch, selectedStatus, selectedCategory]);
+  }, [search, selectedRegion, selectedBranch, selectedStatus, selectedCategory]);
 
   const completionRate = stats?.completionRate ?? 0;
 
@@ -453,6 +478,25 @@ export const FleetOverview: React.FC = () => {
 
         {/* Dropdown Filters */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Regional Territory Filter */}
+          <div className="flex items-center space-x-1.5">
+            <span className="text-slate-500 font-bold uppercase text-[10px]">Region:</span>
+            <select
+              value={selectedRegion}
+              onChange={(e) => {
+                setSelectedRegion(e.target.value);
+                setSelectedBranch('ALL');
+              }}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            >
+              <option value="ALL">All Regions</option>
+              <option value="NORTHERN">NORTHERN</option>
+              <option value="CENTRAL">CENTRAL</option>
+              <option value="EAST">EAST</option>
+              <option value="SOUTH">SOUTH</option>
+            </select>
+          </div>
+
           {/* Branch / Depot Filter */}
           <div className="flex items-center space-x-1.5">
             <span className="text-slate-500 font-bold uppercase text-[10px]">Depot:</span>
@@ -568,10 +612,18 @@ export const FleetOverview: React.FC = () => {
                         <div className="text-[11px] text-slate-400">{v.model}</div>
                       </td>
                       <td className="py-3.5 px-4 font-mono">
-                        <span className="bg-slate-100 px-2 py-0.5 rounded text-slate-700 font-bold text-[11px]">
-                          {v.branch}
-                        </span>
-                        <span className="text-[11px] text-slate-500 ml-1.5">({v.area})</span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="bg-blue-50 text-blue-800 border border-blue-200 px-1.5 py-0.5 rounded font-bold text-[10px]">
+                            {v.region || (masterDepots.find(d => d.code === v.branch)?.regionId) || 'CENTRAL'}
+                          </span>
+                          <span className="bg-slate-100 px-2 py-0.5 rounded text-slate-800 font-bold text-[11px] border border-slate-200">
+                            {v.branch}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-1">
+                          <span className="text-slate-400">Route: </span>
+                          <span className="font-bold text-slate-700">{v.area || v.assignedRoute || 'UNASSIGNED'}</span>
+                        </div>
                       </td>
                       <td className="py-3.5 px-4 font-mono text-slate-600">
                         <div>
@@ -891,36 +943,110 @@ export const FleetOverview: React.FC = () => {
                   />
                 </div>
 
+                {/* Regional Territory */}
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Regional Territory
+                  </label>
+                  <select
+                    value={vehicleForm.region || (masterDepots.find(d => d.code === vehicleForm.branch)?.regionId) || 'CENTRAL'}
+                    onChange={(e) => {
+                      const reg = e.target.value;
+                      const depotsInReg = masterDepots.filter(d => d.regionId === reg);
+                      const newBranch = depotsInReg.some(d => d.code === vehicleForm.branch)
+                        ? vehicleForm.branch
+                        : (depotsInReg[0]?.code || vehicleForm.branch);
+                      setVehicleForm({
+                        ...vehicleForm,
+                        region: reg,
+                        branch: newBranch,
+                      });
+                    }}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                  >
+                    <option value="CENTRAL">CENTRAL</option>
+                    <option value="NORTHERN">NORTHERN</option>
+                    <option value="EAST">EAST</option>
+                    <option value="SOUTH">SOUTH</option>
+                  </select>
+                </div>
+
                 {/* Branch / Depot */}
                 <div className="space-y-1">
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
                     Depot Branch Code *
                   </label>
-                  <input
-                    type="text"
+                  <select
                     required
                     value={vehicleForm.branch || ''}
-                    onChange={(e) => setVehicleForm({ ...vehicleForm, branch: e.target.value.toUpperCase() })}
-                    placeholder="e.g. KL, BL, KJ, GB"
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                    onChange={(e) => {
+                      const b = e.target.value.toUpperCase();
+                      const dObj = masterDepots.find(d => d.code === b);
+                      setVehicleForm({
+                        ...vehicleForm,
+                        branch: b,
+                        region: dObj ? dObj.regionId : vehicleForm.region,
+                      });
+                    }}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                  >
+                    <option value="">-- Select Depot --</option>
+                    {masterDepots
+                      .filter(d => {
+                        const curReg = vehicleForm.region || 'CENTRAL';
+                        return !curReg || curReg === 'ALL' || d.regionId === curReg;
+                      })
+                      .map(d => (
+                        <option key={d.code} value={d.code}>
+                          {d.code} ({d.regionId})
+                        </option>
+                      ))}
+                    {depots
+                      .filter(d => !masterDepots.some(m => m.code === d))
+                      .map(d => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                  </select>
                 </div>
 
                 {/* Area / Route */}
-                <div className="space-y-1">
+                <div className="space-y-1 sm:col-span-2">
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Assigned Route / Area (e.g. BL01, KL01)
+                    Assigned Route / Delivery Area *
                   </label>
-                  <input
-                    type="text"
-                    value={vehicleForm.area || ''}
-                    onChange={(e) => {
-                      const val = e.target.value.toUpperCase();
-                      setVehicleForm({ ...vehicleForm, area: val, assignedRoute: val });
-                    }}
-                    placeholder="e.g. BL01, BL02, KL01"
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <select
+                      value={vehicleForm.area || vehicleForm.assignedRoute || ''}
+                      onChange={(e) => {
+                        const val = e.target.value.toUpperCase();
+                        setVehicleForm({ ...vehicleForm, area: val, assignedRoute: val });
+                      }}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                    >
+                      <option value="">-- Select Registered Route --</option>
+                      {masterRoutes
+                        .filter(r => !vehicleForm.branch || r.depotId === vehicleForm.branch)
+                        .map(r => (
+                          <option key={r.code} value={r.code}>
+                            {r.code} ({r.depotId}) {r.assignedVehiclePlate ? `• [${r.assignedVehiclePlate}]` : '• [Available]'}
+                          </option>
+                        ))}
+                    </select>
+
+                    <input
+                      type="text"
+                      value={vehicleForm.area || ''}
+                      onChange={(e) => {
+                        const val = e.target.value.toUpperCase();
+                        setVehicleForm({ ...vehicleForm, area: val, assignedRoute: val });
+                      }}
+                      placeholder="Or type custom route (e.g. 7K01, BL01)"
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <span className="text-[10px] text-slate-400 block mt-1">
+                    Select from existing routes registered to depot {vehicleForm.branch || 'selected'}, or type a new code to register it.
+                  </span>
                 </div>
 
                 {/* Vehicle Category */}

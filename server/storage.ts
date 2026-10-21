@@ -5,6 +5,37 @@ import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, VehicleStatus 
 import { INITIAL_VEHICLES, INITIAL_DRIVERS } from './seedData';
 import { scheduleDebouncedBackup } from './backupService';
 import { logger } from './logger';
+import { generateHistoricalInspections, calculateExecutiveAnalytics, ExecutiveAnalyticsResult } from './analyticsService';
+import {
+  initOperationsStore,
+  getRegions as opGetRegions,
+  createRegion as opCreateRegion,
+  updateRegion as opUpdateRegion,
+  deleteRegion as opDeleteRegion,
+  getDepots as opGetDepots,
+  createDepot as opCreateDepot,
+  updateDepot as opUpdateDepot,
+  deleteDepot as opDeleteDepot,
+  getRoutes as opGetRoutes,
+  createRoute as opCreateRoute,
+  updateRoute as opUpdateRoute,
+  deleteRoute as opDeleteRoute,
+  syncRoutesFromVehicles,
+  linkVehicleToOperations,
+  linkAllVehiclesToOperations,
+} from './operationsService';
+import {
+  initRbacStore,
+  verifyRbacLogin,
+  getRbacRoles,
+  createRbacRole,
+  updateRbacRole,
+  deleteRbacRole,
+  getRbacUsers,
+  createRbacUser,
+  updateRbacUser,
+  deleteRbacUser,
+} from './rbacService';
 import {
   connectMssql,
   isMssqlConnected,
@@ -140,7 +171,8 @@ export function initStore() {
         console.log(`[Storage] Configured Public QR Base URL: ${memoryStore.settings.publicBaseUrl}`);
       }
 
-      if (memoryStore.vehicles.length === 0 && memoryStore.drivers.length === 0) {
+      const isDemoPurged = Boolean((memoryStore.settings as any)?.demoPurged);
+      if (!isDemoPurged && memoryStore.vehicles.length === 0 && memoryStore.drivers.length === 0) {
         memoryStore.vehicles = [...INITIAL_VEHICLES];
         memoryStore.drivers = [...INITIAL_DRIVERS];
         memoryStore.vehicles.forEach((v) => {
@@ -166,21 +198,22 @@ export function initStore() {
       // Automatically prune any inspection records older than 45 days on startup
       pruneOldInspections(45);
     } else {
-      // Clean start - initialize with preset fleet and drivers
-      memoryStore.vehicles = [...INITIAL_VEHICLES];
-      memoryStore.drivers = [...INITIAL_DRIVERS];
+      // Clean start
+      memoryStore.vehicles = [];
+      memoryStore.drivers = [];
       memoryStore.inspections = [];
       memoryStore.auditLogs = [];
       memoryStore.settings = { publicBaseUrl: envPublicUrl };
-      // Ensure all initial vehicles have static QR tokens
-      memoryStore.vehicles.forEach((v) => {
-        if (!v.qrToken || typeof v.qrToken !== 'string' || !v.qrToken.trim()) {
-          v.qrToken = generateVehicleQrToken();
-        }
-      });
       saveStore(true);
-      console.log(`[Storage] Initialized clean store with ${memoryStore.vehicles.length} preset vehicles and ${memoryStore.drivers.length} drivers.`);
+      console.log(`[Storage] Initialized clean empty store ready for real database.`);
     }
+
+    // Initialize Master Operations Hierarchy (Regions, Depots, Routes)
+    initOperationsStore(memoryStore.vehicles);
+    linkAllVehiclesToOperations(memoryStore.vehicles);
+
+    // Initialize Role-Based Access Control & Staff Accounts
+    initRbacStore();
 
     // Connect to Microsoft SQL Server (SSMS) and synchronize data
     if (process.env.DB_TYPE !== 'json') {
@@ -193,6 +226,13 @@ export function initStore() {
               dbLoadInspections(),
               dbLoadAuditLogs(),
             ]);
+            // When connected to production SQL Server:
+            // 1. Never push mock/seed data to the production database!
+            // 2. Mark demoPurged = true so local demo seed data is permanently disabled.
+            if (!memoryStore.settings) memoryStore.settings = {};
+            (memoryStore.settings as any).demoPurged = true;
+            (memoryStore.settings as any).productionDbActive = true;
+
             if (dbV.length > 0) {
               memoryStore.vehicles = dbV;
               let mssqlTokenMigrated = 0;
@@ -206,27 +246,32 @@ export function initStore() {
               if (mssqlTokenMigrated > 0) {
                 console.log(`[Storage] Auto-generated static QR security tokens for ${mssqlTokenMigrated} vehicles in SQL Server.`);
               }
-            } else if (memoryStore.vehicles.length > 0) {
-              console.log(`[MSSQL Auto-Sync] SQL Server Vehicles table is empty, auto-pushing ${memoryStore.vehicles.length} local vehicles to SQL Server...`);
-              await dbBulkSaveVehicles(memoryStore.vehicles);
+            } else {
+              // Production DB connected but Vehicles table is empty: do not auto-push demo data!
+              console.log(`[MSSQL Production Safe Sync] SQL Server Vehicles table is empty. Keeping clean 0 vehicles in production; discarded local mock vehicles.`);
+              memoryStore.vehicles = [];
             }
 
             if (dbD.length > 0) {
               memoryStore.drivers = dbD;
-            } else if (memoryStore.drivers.length > 0) {
-              console.log(`[MSSQL Auto-Sync] SQL Server Drivers table is empty, auto-pushing ${memoryStore.drivers.length} local drivers to SQL Server...`);
-              await dbBulkSaveDrivers(memoryStore.drivers);
+            } else {
+              console.log(`[MSSQL Production Safe Sync] SQL Server Drivers table is empty. Discarded local mock drivers.`);
+              memoryStore.drivers = [];
             }
 
             if (dbI.length > 0) {
               memoryStore.inspections = dbI;
-            } else if (memoryStore.inspections.length > 0) {
-              console.log(`[MSSQL Auto-Sync] SQL Server Inspections table is empty, auto-pushing ${memoryStore.inspections.length} local inspections to SQL Server...`);
-              for (const insp of memoryStore.inspections) {
-                await dbSaveInspection(insp);
-              }
+            } else {
+              console.log(`[MSSQL Production Safe Sync] SQL Server Inspections table is empty. Discarded local mock inspections.`);
+              memoryStore.inspections = [];
             }
-            if (dbA.length > 0) memoryStore.auditLogs = dbA;
+
+            if (dbA.length > 0) {
+              memoryStore.auditLogs = dbA;
+            } else {
+              memoryStore.auditLogs = [];
+            }
+
             console.log(`[MSSQL Sync] Successfully synchronized with SQL Server: ${memoryStore.vehicles.length} Vehicles, ${memoryStore.drivers.length} Drivers, ${memoryStore.inspections.length} Inspections.`);
             saveStore(true);
             invalidateFleetStatsCache();
@@ -303,6 +348,24 @@ export function saveStore(immediate: boolean = false) {
     saveDebounceTimer = null;
     performAtomicSaveAsync();
   }, 250);
+}
+
+export function saveStoreSync() {
+  if (saveDebounceTimer) {
+    clearTimeout(saveDebounceTimer);
+    saveDebounceTimer = null;
+  }
+  try {
+    const serialized = JSON.stringify(memoryStore);
+    fs.writeFileSync(STORE_TMP_FILE, serialized, 'utf-8');
+    fs.renameSync(STORE_TMP_FILE, STORE_FILE);
+    try {
+      fs.copyFileSync(STORE_FILE, STORE_BACKUP_FILE);
+    } catch {}
+    invalidateFleetStatsCache();
+  } catch (err) {
+    logger.error('STORAGE', 'Failed to synchronously save fleet store:', err);
+  }
 }
 
 // Vehicle APIs
@@ -399,6 +462,7 @@ export function updateVehicle(vehicleNo: string, updates: Partial<Vehicle>, isIn
     ...updates,
     vehicleNo: updates.vehicleNo ? updates.vehicleNo.replace(/\s+/g, '').toUpperCase() : memoryStore.vehicles[index].vehicleNo,
   };
+  linkVehicleToOperations(memoryStore.vehicles[index]);
   invalidateFleetStatsCache();
   saveStore();
   dbSaveVehicle(memoryStore.vehicles[index]).catch(e => console.error('[MSSQL Error] saveVehicle:', e));
@@ -442,6 +506,7 @@ export function createVehicle(vehicleData: Partial<Vehicle>): Vehicle {
     assignedRoute: vehicleData.assignedRoute || vehicleData.area || `${vehicleData.branch || 'BL'}01`,
   };
 
+  linkVehicleToOperations(newVehicle);
   memoryStore.vehicles.push(newVehicle);
   addAuditLog({
     eventType: 'VEHICLE_CREATED',
@@ -917,40 +982,45 @@ export function deleteDriver(identifier: string): boolean {
   return false;
 }
 
-// Admin APIs
-export const ADMIN_USERS = [
-  { username: 'admin', name: 'Fleet Operations Administrator', role: 'Super Admin' },
-  { username: 'admin1', name: 'Fleet Operations Admin 1', role: 'Super Admin' },
-  { username: 'admin2', name: 'Depot Dispatcher Admin 2', role: 'Branch Manager' },
-  { username: 'admin3', name: 'Safety & Compliance Admin 3', role: 'Audit Lead' },
-];
-
-export function verifyAdminLogin(usernameAttempt: string, passwordAttempt: string): { success: boolean; admin?: { username: string; name: string; role: string }; message?: string } {
-  const cleanUser = usernameAttempt.trim().toLowerCase();
-  const cleanPass = passwordAttempt.trim();
-
-  const found = ADMIN_USERS.find(a => a.username.toLowerCase() === cleanUser);
-
-  // Support custom admin password via environment variable (e.g. set ADMIN_PASSWORD=MySecretKey in .env)
-  const envPassword = (process.env.ADMIN_PASSWORD || '').trim();
-  const isPasswordCorrect = envPassword
-    ? cleanPass === envPassword
-    : cleanPass === 'admin123';
-
-  if (found && isPasswordCorrect) {
+// Admin & RBAC Authentication APIs
+export function verifyAdminLogin(
+  usernameAttempt: string,
+  passwordAttempt: string
+): {
+  success: boolean;
+  admin?: {
+    username: string;
+    name: string;
+    role: string;
+    assignedDepot?: string;
+    permissions?: string[];
+  };
+  message?: string;
+} {
+  const result = verifyRbacLogin(usernameAttempt, passwordAttempt);
+  if (result.success && result.admin) {
     addAuditLog({
       eventType: 'ADMIN_LOGIN',
-      operator: `${found.username} (${found.name})`,
+      operator: `${result.admin.username} (${result.admin.name} - ${result.admin.role})`,
       ip: '127.0.0.1',
-      details: `Admin logged in successfully to management portal.`,
+      details: `Staff logged into admin portal. Role: [${result.admin.role}], Assigned Depot: [${result.admin.assignedDepot || 'ALL'}]`,
       severity: 'info',
     });
-    return { success: true, admin: found };
+    return result;
   }
-
-  // Secure generic error message - never leak password hints or valid usernames in HTTP responses
-  return { success: false, message: 'Invalid admin username or password.' };
+  return { success: false, message: result.message || 'Invalid admin username or password.' };
 }
+
+export {
+  getRbacRoles,
+  createRbacRole,
+  updateRbacRole,
+  deleteRbacRole,
+  getRbacUsers,
+  createRbacUser,
+  updateRbacUser,
+  deleteRbacUser,
+};
 
 // Helper to extract calendar date string (YYYY-MM-DD) in local / Asia/Kuala_Lumpur timezone
 export function getCalendarDateString(date: Date | string = new Date()): string {
@@ -1394,7 +1464,11 @@ export function clearAllFleetData(): { success: boolean; message: string } {
   memoryStore.drivers = [];
   memoryStore.inspections = [];
   memoryStore.auditLogs = [];
-  saveStore();
+  if (!memoryStore.settings) {
+    memoryStore.settings = {};
+  }
+  (memoryStore.settings as any).demoPurged = true;
+  saveStoreSync();
   dbClearVehicles().catch(e => console.error('[MSSQL Error] clearVehicles:', e));
   dbClearDrivers().catch(e => console.error('[MSSQL Error] clearDrivers:', e));
   dbClearInspections().catch(e => console.error('[MSSQL Error] clearInspections:', e));
@@ -1404,7 +1478,11 @@ export function clearAllFleetData(): { success: boolean; message: string } {
 export function clearAllVehicles(): { success: boolean; message: string } {
   memoryStore.vehicles = [];
   memoryStore.inspections = [];
-  saveStore();
+  if (!memoryStore.settings) {
+    memoryStore.settings = {};
+  }
+  (memoryStore.settings as any).demoPurged = true;
+  saveStoreSync();
   dbClearVehicles().catch(e => console.error('[MSSQL Error] clearVehicles:', e));
   dbClearInspections().catch(e => console.error('[MSSQL Error] clearInspections:', e));
   return { success: true, message: 'All vehicles successfully cleared from database.' };
@@ -1412,7 +1490,7 @@ export function clearAllVehicles(): { success: boolean; message: string } {
 
 export function clearAllDrivers(): { success: boolean; message: string } {
   memoryStore.drivers = [];
-  saveStore();
+  saveStore(true);
   dbClearDrivers().catch(e => console.error('[MSSQL Error] clearDrivers:', e));
   return { success: true, message: 'All drivers successfully cleared from database.' };
 }
@@ -1903,6 +1981,136 @@ export function getDatabaseStatus() {
     server: cfg.server,
     database: cfg.database,
     user: cfg.user,
+    demoPurged: Boolean((memoryStore.settings as any)?.demoPurged),
+    productionDbActive: Boolean((memoryStore.settings as any)?.productionDbActive),
   };
 }
+
+export function getExecutiveAnalytics(filters?: {
+  timeframe?: string;
+  branch?: string;
+  truckCategory?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}): ExecutiveAnalyticsResult {
+  const routes = opGetRoutes(memoryStore.vehicles);
+  return calculateExecutiveAnalytics(
+    memoryStore.inspections,
+    memoryStore.vehicles,
+    memoryStore.drivers,
+    routes,
+    filters
+  );
+}
+
+export function seedHistoricalInspections(daysBack: number = 30): { seededCount: number; totalInspections: number } {
+  if (memoryStore.vehicles.length === 0) {
+    memoryStore.vehicles = [...INITIAL_VEHICLES];
+    memoryStore.vehicles.forEach((v) => {
+      if (!v.qrToken) v.qrToken = generateVehicleQrToken();
+    });
+  }
+  if (memoryStore.drivers.length === 0) {
+    memoryStore.drivers = [...INITIAL_DRIVERS];
+  }
+  if (memoryStore.settings) {
+    delete (memoryStore.settings as any).demoPurged;
+  }
+  linkAllVehiclesToOperations(memoryStore.vehicles);
+
+  const generated = generateHistoricalInspections(memoryStore.vehicles, memoryStore.drivers, daysBack);
+  memoryStore.inspections = generated;
+  saveStore(true);
+  invalidateFleetStatsCache();
+  addAuditLog({
+    eventType: 'DATA_MANAGEMENT',
+    operator: 'Admin Executive Portal',
+    ip: '127.0.0.1',
+    details: `Seeded ${generated.length} demo historical pre-trip inspection records for 30-day analytics across ${memoryStore.vehicles.length} vehicles.`,
+    severity: 'info',
+  });
+  return { seededCount: generated.length, totalInspections: memoryStore.inspections.length };
+}
+
+// ----------------- OPERATIONS HIERARCHY CRUD EXPORTS -----------------
+export function getRegions() { return opGetRegions(memoryStore.vehicles); }
+export function createRegion(item: any) { return opCreateRegion(item); }
+export function updateRegion(id: string, updates: any) { return opUpdateRegion(id, updates); }
+export function deleteRegion(id: string) { return opDeleteRegion(id); }
+
+export function getDepots() { return opGetDepots(memoryStore.vehicles); }
+export function createDepot(item: any) { return opCreateDepot(item); }
+export function updateDepot(id: string, updates: any) { return opUpdateDepot(id, updates); }
+export function deleteDepot(id: string) { return opDeleteDepot(id); }
+
+export function getRoutes() { return opGetRoutes(memoryStore.vehicles); }
+
+function syncVehicleWithRoute(route: any) {
+  if (!route || !route.assignedVehiclePlate) return;
+  const cleanPlate = route.assignedVehiclePlate.replace(/\s+/g, '').toUpperCase();
+  const v = memoryStore.vehicles.find(veh => veh.vehicleNo.replace(/\s+/g, '').toUpperCase() === cleanPlate);
+  if (v) {
+    v.assignedRoute = route.code;
+    v.area = route.code;
+    if (route.depotId) {
+      v.branch = route.depotId;
+      const depots = opGetDepots(memoryStore.vehicles);
+      const matchDepot = depots.find(d => d.code === route.depotId);
+      if (matchDepot) {
+        v.region = matchDepot.regionId;
+      }
+    }
+    saveStore();
+  }
+}
+
+export function createRoute(item: any) {
+  const r = opCreateRoute(item);
+  syncVehicleWithRoute(r);
+  return r;
+}
+
+export function updateRoute(id: string, updates: any) {
+  const r = opUpdateRoute(id, updates);
+  syncVehicleWithRoute(r);
+  return r;
+}
+
+export function deleteRoute(id: string) { return opDeleteRoute(id); }
+export function syncRoutes() { return syncRoutesFromVehicles(memoryStore.vehicles); }
+
+export function getDemoStatus(): {
+  isDemoActive: boolean;
+  demoPurged: boolean;
+  totalVehicles: number;
+  totalDrivers: number;
+  totalInspections: number;
+} {
+  const isPurged = Boolean((memoryStore.settings as any)?.demoPurged);
+  const isDemo = !isPurged && (memoryStore.inspections.length > 500 || memoryStore.vehicles.length === 26);
+  return {
+    isDemoActive: isDemo,
+    demoPurged: isPurged,
+    totalVehicles: memoryStore.vehicles.length,
+    totalDrivers: memoryStore.drivers.length,
+    totalInspections: memoryStore.inspections.length,
+  };
+}
+
+export function purgeAllDemoData(): { success: boolean; message: string } {
+  memoryStore.vehicles = [];
+  memoryStore.drivers = [];
+  memoryStore.inspections = [];
+  memoryStore.auditLogs = [];
+  if (!memoryStore.settings) {
+    memoryStore.settings = {};
+  }
+  (memoryStore.settings as any).demoPurged = true;
+  invalidateFleetStatsCache();
+  saveStoreSync();
+  logger.info('STORAGE', 'Purged all demo seed vehicles, drivers and inspections from store.');
+  return { success: true, message: 'All demo seed vehicles, drivers, and inspection records successfully purged. Ready for real database.' };
+}
+
+
 

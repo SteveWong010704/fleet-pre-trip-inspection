@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Driver, Vehicle, InspectionCheckItem, InspectionPhoto, InspectionRecord, STANDARD_10_POINT_ITEMS, getActiveInspectionItems, isSaturdayInspection, requiresFull15PhotoInspection, AdminUser } from './types';
 import { Navbar } from './components/Navbar';
 import { DriverAuth } from './components/DriverApp/DriverAuth';
@@ -14,11 +14,14 @@ import { BulkManager } from './components/AdminPortal/BulkManager';
 import { QrCodeGenerator } from './components/AdminPortal/QrCodeGenerator';
 import { AuditLogViewer } from './components/AdminPortal/AuditLogViewer';
 import { BackupRetentionManager } from './components/AdminPortal/BackupRetentionManager';
+import { ExecutiveDashboard } from './components/AdminPortal/ExecutiveDashboard';
+import { OperationsManager } from './components/AdminPortal/OperationsManager';
+import { UserManagement } from './components/AdminPortal/UserManagement';
 import { fetchVehicleByPlate, checkDriverDailyInspection, checkVehicleDailyInspection, clearAuthToken } from './lib/api';
 import { syncPublicBaseUrlFromServer } from './lib/publicUrl';
 import { getCheckpointRequiredPhotoCount } from './lib/checkpointConfig';
 import { getDefaultSystemChecks } from './lib/quickChecklistConfig';
-import { Smartphone, LayoutDashboard, Truck, ClipboardList, Send, FileCheck, ArrowLeft, ArrowRight, ShieldCheck, Users, AlertTriangle, HardDrive } from 'lucide-react';
+import { Smartphone, LayoutDashboard, Truck, ClipboardList, Send, FileCheck, ArrowLeft, ArrowRight, ShieldCheck, Users, AlertTriangle, HardDrive, TrendingUp, Route, UserCheck } from 'lucide-react';
 
 export default function App() {
   // Check if opened from a Driver QR code scan (?plate=XXX or ?view=driver or ?certId=XXX)
@@ -32,7 +35,23 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'driver' | 'admin'>(() => {
     return isDriverQrScan() ? 'driver' : 'admin';
   });
-  const [adminTab, setAdminTab] = useState<'fleet' | 'drivers' | 'history' | 'bulk' | 'qr' | 'logs' | 'backup'>('fleet');
+
+  type AdminTab = 'analytics' | 'fleet' | 'drivers' | 'operations' | 'history' | 'bulk' | 'qr' | 'logs' | 'backup' | 'users';
+
+  const ALL_ADMIN_TABS: { id: AdminTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+    { id: 'analytics', label: 'Executive Analytics', icon: TrendingUp },
+    { id: 'fleet', label: 'Vehicles Catalog', icon: Truck },
+    { id: 'drivers', label: 'Drivers & Accounts', icon: Users },
+    { id: 'operations', label: 'Manage Route, Depo, Region', icon: Route },
+    { id: 'history', label: 'Inspection Audit & Export', icon: ClipboardList },
+    { id: 'bulk', label: 'Bulk Upload & Auto-QR', icon: Send },
+    { id: 'qr', label: 'QR Label Generator', icon: FileCheck },
+    { id: 'logs', label: 'Security Audit Logs', icon: ShieldCheck },
+    { id: 'backup', label: 'Daily Backup (C:\\ Drive)', icon: HardDrive },
+    { id: 'users', label: 'User Management & RBAC', icon: UserCheck },
+  ];
+
+  const [adminTab, setAdminTab] = useState<AdminTab>('analytics');
 
   // Admin Auth State (session persisted so refresh on 192.168.1.80 maintains admin session)
   const [activeAdmin, setActiveAdmin] = useState<AdminUser | null>(() => {
@@ -44,6 +63,24 @@ export default function App() {
     }
     return null;
   });
+
+  // Calculate tabs accessible by current user based on RBAC permission matrix
+  const permittedTabs = useMemo<AdminTab[]>(() => {
+    if (!activeAdmin) return [];
+    if (activeAdmin.role === 'Global Admin' || activeAdmin.username === 'steve') {
+      return ALL_ADMIN_TABS.map(t => t.id);
+    }
+    const perms = activeAdmin.permissions || [];
+    const valid = ALL_ADMIN_TABS.map(t => t.id).filter(id => perms.includes(id));
+    return valid.length > 0 ? valid : ['analytics'];
+  }, [activeAdmin]);
+
+  // Auto-switch to first permitted tab if active tab is restricted by RBAC
+  useEffect(() => {
+    if (activeAdmin && permittedTabs.length > 0 && !permittedTabs.includes(adminTab)) {
+      setAdminTab(permittedTabs[0]);
+    }
+  }, [activeAdmin, permittedTabs, adminTab]);
 
   // Driver App State
   const [activeDriver, setActiveDriver] = useState<Driver | null>(null);
@@ -403,7 +440,20 @@ export default function App() {
               <>
                 {/* Admin Sub-Tabs */}
                 <div className="flex flex-wrap items-center gap-2 p-1.5 bg-white border border-slate-200 rounded-2xl shadow-sm no-print">
-                  <button
+                  {permittedTabs.includes('analytics') && (
+<button
+                    onClick={() => setAdminTab('analytics')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                      adminTab === 'analytics' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    <TrendingUp className="w-4 h-4" />
+                    <span>Executive Analytics</span>
+                  </button>
+                  )}
+
+                  {permittedTabs.includes('fleet') && (
+<button
                     onClick={() => setAdminTab('fleet')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'fleet' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -412,8 +462,10 @@ export default function App() {
                     <Truck className="w-4 h-4" />
                     <span>Vehicles Catalog</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('drivers') && (
+<button
                     onClick={() => setAdminTab('drivers')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'drivers' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -422,8 +474,22 @@ export default function App() {
                     <Users className="w-4 h-4" />
                     <span>Drivers & Accounts</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('operations') && (
+<button
+                    onClick={() => setAdminTab('operations')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                      adminTab === 'operations' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    <Route className="w-4 h-4" />
+                    <span>Manage Route, Depo, Region</span>
+                  </button>
+                  )}
+
+                  {permittedTabs.includes('history') && (
+<button
                     onClick={() => setAdminTab('history')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'history' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -432,8 +498,10 @@ export default function App() {
                     <ClipboardList className="w-4 h-4" />
                     <span>Inspection Audit & Export</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('bulk') && (
+<button
                     onClick={() => setAdminTab('bulk')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'bulk' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -442,8 +510,10 @@ export default function App() {
                     <Send className="w-4 h-4" />
                     <span>Bulk Upload & Auto-QR</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('qr') && (
+<button
                     onClick={() => setAdminTab('qr')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'qr' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -452,8 +522,10 @@ export default function App() {
                     <FileCheck className="w-4 h-4" />
                     <span>QR Label Generator</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('logs') && (
+<button
                     onClick={() => setAdminTab('logs')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'logs' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -462,8 +534,10 @@ export default function App() {
                     <ShieldCheck className="w-4 h-4" />
                     <span>Security Audit Logs</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('backup') && (
+<button
                     onClick={() => setAdminTab('backup')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'backup' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -472,16 +546,31 @@ export default function App() {
                     <HardDrive className="w-4 h-4" />
                     <span>Daily Backup (C:\ Drive)</span>
                   </button>
+                  )}
+                  {permittedTabs.includes('users') && (
+                    <button
+                      onClick={() => setAdminTab('users')}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                        adminTab === 'users' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                    >
+                      <UserCheck className="w-4 h-4" />
+                      <span>User Management & RBAC</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Sub-Tab View Rendering */}
+                {adminTab === 'analytics' && <ExecutiveDashboard />}
                 {adminTab === 'fleet' && <FleetOverview />}
                 {adminTab === 'drivers' && <DriverManagement />}
+                {adminTab === 'operations' && <OperationsManager />}
                 {adminTab === 'history' && <InspectionHistory />}
                 {adminTab === 'bulk' && <BulkManager />}
                 {adminTab === 'qr' && <QrCodeGenerator />}
                 {adminTab === 'logs' && <AuditLogViewer />}
                 {adminTab === 'backup' && <BackupRetentionManager />}
+                {adminTab === 'users' && permittedTabs.includes('users') && <UserManagement />}
               </>
             )}
           </div>

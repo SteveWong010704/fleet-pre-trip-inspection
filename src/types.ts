@@ -12,6 +12,7 @@ export interface Vehicle {
   limitRm: number | string;
   area: string;
   branch: string; // Depot code (e.g., KL, KJ, GB, NL, BL, etc.)
+  region?: string; // Regional territory (e.g., NORTHERN, CENTRAL, EAST, SOUTH)
   costCenter: string;
   brand: string;
   logoDate?: string;
@@ -73,9 +74,85 @@ export function getDailyInspectionLimit(designation?: string | null): number {
 }
 
 export interface AdminUser {
-  username: string; // admin1, admin2, admin3
+  username: string; // e.g. steve, admin, etc.
   name: string;
   role: string;
+  assignedDepot?: string; // 'ALL' or specific depot code
+  permissions?: string[]; // Allowed tab/feature IDs
+}
+
+export interface RbacFeature {
+  id: string;
+  label: string;
+  category: 'Analytics' | 'Fleet & Assets' | 'Operations' | 'Audits & Security' | 'System';
+  description: string;
+}
+
+export const ADMIN_FEATURES: RbacFeature[] = [
+  { id: 'analytics', label: 'Executive Analytics', category: 'Analytics', description: 'Statutory compliance KPI overview, failure hotspots, and executive audit summaries' },
+  { id: 'fleet', label: 'Vehicles Catalog', category: 'Fleet & Assets', description: 'Fleet roadworthiness status, chassis, registration, and depot assignment' },
+  { id: 'drivers', label: 'Drivers & Accounts', category: 'Operations', description: 'Driver directory, PIN resets, SPV multi-trip designations, and accounts' },
+  { id: 'operations', label: 'Manage Route, Depo, Region', category: 'Operations', description: 'Depot hubs, geographic regions, delivery route allocations, and master sync' },
+  { id: 'history', label: 'Inspection Audit & Export', category: 'Audits & Security', description: 'Pre-trip log archive, digital certificates, fault records, and statutory PDF/Excel exports' },
+  { id: 'bulk', label: 'Bulk Upload & Auto-QR', category: 'Fleet & Assets', description: 'Spreadsheet import batch processor and automatic QR code generation' },
+  { id: 'qr', label: 'QR Label Generator', category: 'Fleet & Assets', description: 'Physical high-entropy QR windshield decals and printable label sheets' },
+  { id: 'logs', label: 'Security Audit Logs', category: 'Audits & Security', description: 'Forensic tamper-evident audit trails, operator logins, and IP tracking' },
+  { id: 'backup', label: 'Daily Backup (C:\\ Drive)', category: 'System', description: 'Local offline database backups, automated snapshots, and retention manager' },
+  { id: 'users', label: 'User Management & RBAC', category: 'System', description: 'Staff account provisioning, depot assignment, custom positions, and permission matrix' },
+];
+
+export interface RbacRole {
+  id: string;            // unique identifier (e.g. 'global_admin', 'logistic_admin')
+  name: string;          // display name (e.g. 'Global Admin', 'Logistic Admin')
+  description: string;
+  isSystem?: boolean;    // true for Global Admin (cannot be deleted)
+  permissions: string[]; // array of feature ids: ['analytics', 'fleet', ...]
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface RbacUser {
+  username: string;
+  name: string;
+  password?: string;
+  role: string;          // corresponds to role name
+  assignedDepot: string; // 'ALL' or specific depot code
+  active: boolean;
+  createdAt: string;
+  lastLogin?: string;
+}
+
+export interface RegionItem {
+  id: string;       // e.g. 'NORTHERN', 'CENTRAL', 'EAST', 'SOUTH'
+  name: string;     // e.g. 'NORTHERN', 'CENTRAL', 'EAST', 'SOUTH'
+  description?: string;
+  depotsCount?: number;
+  vehiclesCount?: number;
+}
+
+export interface DepotItem {
+  id: string;       // e.g. 'KJ', 'BL', 'KL'
+  code: string;     // e.g. 'KJ', 'BL', 'KL'
+  name?: string;    // e.g. 'KJ'
+  regionId: string; // e.g. 'NORTHERN', 'CENTRAL', 'EAST', 'SOUTH'
+  address?: string;
+  supervisorName?: string;
+  phone?: string;
+  active: boolean;
+  routesCount?: number;
+  vehiclesCount?: number;
+  assignedVehiclePlates?: string[];
+}
+
+export interface RouteItem {
+  id: string;       // e.g. '7K01', 'BL01'
+  code: string;     // e.g. '7K01', 'BL01'
+  name?: string;    // e.g. '7K01'
+  depotId: string;  // e.g. 'KJ', 'BL'
+  assignedVehiclePlate?: string;
+  assignedDriverId?: string;
+  active: boolean;
+  description?: string;
 }
 
 export type CheckStatus = 'Pass' | 'Fail' | 'NA';
@@ -457,3 +534,111 @@ export const APAD_QUICK_SYSTEMS: QuickSystemCheckItem[] = [
   { id: 'mech_steering', group: 'Drive & Mechanical', label: 'Power Steering Handling', detail: 'Steering wheel turns freely without excessive play, stiffness, or vibration' },
   { id: 'mech_leaks_noise', group: 'Drive & Mechanical', label: 'No Fluid Leaks & Abnormal Noise', detail: 'No knocking sounds or oil/fluid drips underneath engine and chassis' },
 ];
+
+export interface DailyTrendPoint {
+  date: string;
+  dayLabel: string;
+  shortDate: string;
+  inspected: number;
+  passed: number;
+  defects: number;
+  totalRoutes?: number;
+  completedRoutes?: number;
+  complianceRate: number; // Route compliance %: (completedRoutes / totalRoutes) * 100
+  defectRate?: number;     // Defect %: (defects / inspected) * 100
+  score?: number;          // Combined score from route compliance & grounded vehicles/defects
+}
+
+export interface DepotRankingItem {
+  rank: number;
+  depot: string;
+  depotName: string;
+  assignedVehicles: number;
+  totalRoutes: number;
+  completedRoutes: number;
+  totalInspections: number;
+  passedCount: number;
+  defectCount: number;
+  groundedVehicles: number; // Grounded vehicles
+  completionRate: number;
+  passRate: number;
+  complianceRate: number; // based on: (completedRoutes / totalRoutes) * 100
+  defectRate: number;     // based on: (defectCount / totalInspections) * 100
+  complianceScore: number;// combined score from route compliance and grounded vehicles (groundedVehicles & defectRate)
+  statusTier: 'Exceptional' | 'Compliant' | 'Needs Attention';
+}
+
+export interface DefectHotspotItem {
+  checkpointId: string;
+  title: string;
+  category: string;
+  defectCount: number;
+  percentage: number;
+  severity: 'Critical' | 'High' | 'Medium' | 'Low';
+  commonIssues: string[];
+  topRemarks: string[];
+  affectedVehicles: string[];
+}
+
+export interface DailyDepotMetric {
+  date: string;
+  formattedDate: string;
+  depot: string;
+  region?: string;
+  assignedVehicles: number;
+  totalRoutes: number;
+  completedRoutes: number;
+  totalInspections: number;
+  passedCount: number;
+  defectCount: number;
+  groundedVehicles: number; // Grounded vehicles
+  complianceRate: number;   // based on: (completedRoutes / totalRoutes) * 100
+  defectRate: number;       // based on: (defectCount / totalInspections) * 100
+  score: number;            // combined from: complianceRate, grounded vehicles, and defectRate
+  statusTier: 'Exceptional' | 'Compliant' | 'Needs Attention';
+}
+
+export interface ExecutiveAnalyticsData {
+  summary: {
+    totalInspections: number;
+    passedCount: number;
+    defectCount: number;
+    totalRoutes: number;
+    completedRoutes: number;
+    complianceRate: number; // based on: (completedRoutes / totalRoutes) * 100
+    defectRate: number;     // based on: (defectCount / totalInspections) * 100
+    complianceScore: number;// combined score from route compliance and grounded vehicles
+    firstTimePassRate: number;
+    activeVehiclesInspected: number;
+    totalFleetVehicles: number;
+    fleetCoverageRate: number;
+    groundedVehiclesNow: number; // Grounded vehicles
+    totalDefectItemsLogged: number;
+    avgInspectionsPerDay: number;
+  };
+  dailyTrends: DailyTrendPoint[];
+  depotRankings: DepotRankingItem[];
+  dailyDepotMetrics: DailyDepotMetric[];
+  defectHotspots: DefectHotspotItem[];
+  recentDefectLogs: {
+    id: string;
+    timestamp: string;
+    formattedDate: string;
+    vehicleNo: string;
+    vehicleBranch: string;
+    truckCategory?: string;
+    driverName: string;
+    driverDepot: string;
+    defectCount: number;
+    defectSummary: string;
+    failedItems: { id: string; title: string; defectNote: string }[];
+  }[];
+  meta: {
+    timeframe: string;
+    startDate: string;
+    endDate: string;
+    selectedBranch: string;
+    selectedCategory: string;
+    generatedAt: string;
+  };
+}

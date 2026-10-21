@@ -1,4 +1,4 @@
-import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats } from '../types';
+import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, ExecutiveAnalyticsData, RegionItem, DepotItem, RouteItem, RbacRole, RbacUser, RbacFeature } from '../types';
 
 const AUTH_TOKEN_KEY = 'FLEET_SESSION_JWT';
 
@@ -490,3 +490,272 @@ export async function pruneActiveDbInspections(maxDays: number = 45): Promise<{
   });
   return await res.json();
 }
+
+export async function fetchExecutiveAnalytics(filters?: {
+  timeframe?: string;
+  branch?: string;
+  truckCategory?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}): Promise<ExecutiveAnalyticsData> {
+  const params = new URLSearchParams();
+  if (filters?.timeframe) params.append('timeframe', filters.timeframe);
+  if (filters?.branch && filters.branch !== 'ALL') params.append('branch', filters.branch);
+  if (filters?.truckCategory && filters.truckCategory !== 'ALL') params.append('truckCategory', filters.truckCategory);
+  if (filters?.dateFrom) params.append('dateFrom', filters.dateFrom);
+  if (filters?.dateTo) params.append('dateTo', filters.dateTo);
+
+  const res = await authFetch(`/api/analytics?${params.toString()}`);
+  const data = await res.json();
+  if (!data.success) {
+    throw new Error(data.error || 'Failed to fetch analytics');
+  }
+  return data.data;
+}
+
+export async function seedDemoInspections(daysBack: number = 30): Promise<{
+  success: boolean;
+  message: string;
+  seededCount: number;
+  totalInspections: number;
+}> {
+  const res = await authFetch('/api/analytics/seed-demo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ daysBack }),
+  });
+  return await res.json();
+}
+
+// ----------------- OPERATIONS HIERARCHY API CLIENT -----------------
+export async function fetchRegions(): Promise<RegionItem[]> {
+  const res = await authFetch('/api/operations/regions');
+  const d = await res.json();
+  return d.data || [];
+}
+
+export async function createRegionApi(item: Partial<RegionItem>): Promise<RegionItem> {
+  const res = await authFetch('/api/operations/regions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(item),
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to create region');
+  return d.data;
+}
+
+export async function updateRegionApi(id: string, updates: Partial<RegionItem>): Promise<RegionItem> {
+  const res = await authFetch(`/api/operations/regions/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to update region');
+  return d.data;
+}
+
+export async function deleteRegionApi(id: string): Promise<boolean> {
+  const res = await authFetch(`/api/operations/regions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to delete region');
+  return d.deleted;
+}
+
+export async function fetchDepots(): Promise<DepotItem[]> {
+  const res = await authFetch('/api/operations/depots');
+  const d = await res.json();
+  return d.data || [];
+}
+
+export async function createDepotApi(item: Partial<DepotItem>): Promise<DepotItem> {
+  const res = await authFetch('/api/operations/depots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(item),
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to create depot');
+  return d.data;
+}
+
+export async function updateDepotApi(id: string, updates: Partial<DepotItem>): Promise<DepotItem> {
+  const res = await authFetch(`/api/operations/depots/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to update depot');
+  return d.data;
+}
+
+export async function deleteDepotApi(id: string): Promise<boolean> {
+  const res = await authFetch(`/api/operations/depots/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to delete depot');
+  return d.deleted;
+}
+
+export async function fetchRoutes(): Promise<RouteItem[]> {
+  const res = await authFetch('/api/operations/routes');
+  const d = await res.json();
+  return d.data || [];
+}
+
+export async function createRouteApi(item: Partial<RouteItem>): Promise<RouteItem> {
+  const res = await authFetch('/api/operations/routes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(item),
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to create route');
+  return d.data;
+}
+
+export async function updateRouteApi(id: string, updates: Partial<RouteItem>): Promise<RouteItem> {
+  const res = await authFetch(`/api/operations/routes/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to update route');
+  return d.data;
+}
+
+export async function deleteRouteApi(id: string): Promise<boolean> {
+  const res = await authFetch(`/api/operations/routes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to delete route');
+  return d.deleted;
+}
+
+export async function syncRoutesFromVehiclesApi(): Promise<{ added: number; total: number }> {
+  const res = await authFetch('/api/operations/routes/sync', { method: 'POST' });
+  return await res.json();
+}
+
+export async function purgeDemoDataApi(): Promise<{ success: boolean; message: string }> {
+  const res = await authFetch('/api/storage/purge-demo', { method: 'POST' });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to purge demo data');
+  return d;
+}
+
+export async function fetchDemoStatus(): Promise<{
+  isDemoActive: boolean;
+  demoPurged: boolean;
+  totalVehicles: number;
+  totalDrivers: number;
+  totalInspections: number;
+}> {
+  const res = await authFetch('/api/storage/demo-status');
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to fetch demo status');
+  return d;
+}
+
+// ================= RBAC & USER MANAGEMENT APIS =================
+
+export async function fetchRbacFeatures(): Promise<RbacFeature[]> {
+  const res = await authFetch('/api/rbac/features');
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to fetch RBAC features');
+  return d.features || [];
+}
+
+export async function fetchRbacRoles(): Promise<RbacRole[]> {
+  const res = await authFetch('/api/rbac/roles');
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to fetch RBAC roles');
+  return d.roles || [];
+}
+
+export async function createRbacRoleApi(data: { name: string; description?: string; permissions?: string[] }): Promise<RbacRole> {
+  const res = await authFetch('/api/rbac/roles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to create role');
+  return d.role;
+}
+
+export async function updateRbacRoleApi(roleId: string, data: { name?: string; description?: string; permissions?: string[] }): Promise<RbacRole> {
+  const res = await authFetch(`/api/rbac/roles/${encodeURIComponent(roleId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to update role');
+  return d.role;
+}
+
+export async function deleteRbacRoleApi(roleId: string): Promise<boolean> {
+  const res = await authFetch(`/api/rbac/roles/${encodeURIComponent(roleId)}`, {
+    method: 'DELETE',
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to delete role');
+  return d.success;
+}
+
+export async function fetchRbacUsers(): Promise<RbacUser[]> {
+  const res = await authFetch('/api/rbac/users');
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to fetch RBAC users');
+  return d.users || [];
+}
+
+export async function createRbacUserApi(data: {
+  username: string;
+  name: string;
+  password?: string;
+  role: string;
+  assignedDepot: string;
+}): Promise<RbacUser> {
+  const res = await authFetch('/api/rbac/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to create user');
+  return d.user;
+}
+
+export async function updateRbacUserApi(
+  username: string,
+  data: {
+    name?: string;
+    password?: string;
+    role?: string;
+    assignedDepot?: string;
+    active?: boolean;
+  }
+): Promise<RbacUser> {
+  const res = await authFetch(`/api/rbac/users/${encodeURIComponent(username)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to update user');
+  return d.user;
+}
+
+export async function deleteRbacUserApi(username: string): Promise<boolean> {
+  const res = await authFetch(`/api/rbac/users/${encodeURIComponent(username)}`, {
+    method: 'DELETE',
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to delete user');
+  return d.success;
+}
+
+

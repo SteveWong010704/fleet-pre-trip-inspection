@@ -1214,7 +1214,7 @@ export const Checklist10Points: React.FC<Props> = ({
                     {/* Selected Defect List - Displayed Line by Line */}
                     <div className="bg-rose-50/80 border border-rose-200 rounded-xl p-3 space-y-2">
                       <span className="text-[10px] font-bold text-rose-900 uppercase tracking-wider block">
-                        Selected Defect Faults (已选缺陷故障清单):
+                        Selected Defect Faults:
                       </span>
 
                       {selectedTags.length === 0 ? (
