@@ -470,10 +470,28 @@ export function calculateExecutiveAnalytics(
   const startMs = startDate.getTime();
   const endMs = endDate.getTime();
 
-  // Map vehicles by plate
+  // Map vehicles by plate. Keep analytics branch/route resolution consistent with
+  // getInspections() so records with missing legacy fields are attributed identically
+  // in Inspection Audit and Executive Analytics.
   const vehicleMap: Record<string, Vehicle> = {};
   vehicles.forEach(v => {
     if (v.vehicleNo) vehicleMap[v.vehicleNo.replace(/\s+/g, '').toUpperCase()] = v;
+  });
+
+  const normalizedInspections = inspections.map(insp => {
+    const cleanPlate = (insp.vehicleNo || '').replace(/\s+/g, '').toUpperCase();
+    const vehicle = vehicleMap[cleanPlate];
+    const resolvedBranch = (insp.vehicleBranch || vehicle?.branch || 'BL').trim().toUpperCase();
+    const resolvedRoute = (insp.route && insp.route !== 'General Route' && !insp.route.startsWith('Route-'))
+      ? insp.route.trim().toUpperCase()
+      : (vehicle?.area || vehicle?.assignedRoute || `${resolvedBranch}01`).trim().toUpperCase();
+
+    return {
+      ...insp,
+      vehicleBranch: resolvedBranch,
+      route: resolvedRoute,
+      truckCategory: insp.truckCategory || vehicle?.truckCategory || 'Small Truck',
+    };
   });
 
   // Map routes by depot
@@ -511,10 +529,10 @@ export function calculateExecutiveAnalytics(
   const totalRoutesCount = allScopedRoutes.size || scopedVehicles.length || 1;
 
   // Filter inspections in date range and vehicle scope
-  const scopedInspections = inspections.filter(insp => {
+  const scopedInspections = normalizedInspections.filter(insp => {
     const t = new Date(insp.timestamp).getTime();
     if (isNaN(t) || t < startMs || t > endMs) return false;
-    if (branchFilter && (insp.vehicleBranch || '').toUpperCase() !== branchFilter) return false;
+    if (branchFilter && (insp.vehicleBranch || '').trim().toUpperCase() !== branchFilter) return false;
     if (categoryFilter && (insp.truckCategory || 'Small Truck') !== categoryFilter) return false;
     return true;
   });
@@ -577,7 +595,10 @@ export function calculateExecutiveAnalytics(
   // Initialize all days in the range so there are no empty gaps in charts
   const cursor = new Date(startDate);
   while (cursor.getTime() <= endMs) {
-    const key = cursor.toISOString().slice(0, 10);
+    // Use the local calendar date instead of UTC ISO conversion. toISOString()
+    // shifts local midnight to the previous date in UTC+ time zones (e.g. Malaysia),
+    // which previously made today's date disappear from the date picker.
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
     trendMap[key] = { inspected: 0, passed: 0, defects: 0, routes: new Set() };
     cursor.setDate(cursor.getDate() + 1);
   }
