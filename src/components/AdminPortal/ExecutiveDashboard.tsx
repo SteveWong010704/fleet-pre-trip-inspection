@@ -168,11 +168,18 @@ export const ExecutiveDashboard: React.FC = () => {
     return Array.from(new Set(data.dailyDepotMetrics.map(m => m.date))).sort((a, b) => b.localeCompare(a));
   }, [data?.dailyDepotMetrics]);
 
-  const { minDailyDate, maxDailyDate } = useMemo(() => {
-    if (!data?.dailyDepotMetrics || data.dailyDepotMetrics.length === 0) return { minDailyDate: undefined, maxDailyDate: undefined };
+  const { minDailyDate } = useMemo(() => {
+    if (!data?.dailyDepotMetrics || data.dailyDepotMetrics.length === 0) return { minDailyDate: undefined };
     const dates = data.dailyDepotMetrics.map(m => m.date).filter(Boolean).sort();
-    return { minDailyDate: dates[0], maxDailyDate: dates[dates.length - 1] };
+    return { minDailyDate: dates[0] };
   }, [data?.dailyDepotMetrics]);
+
+  // The date picker must allow today even when no inspection has been submitted yet.
+  // Use a local YYYY-MM-DD value to avoid UTC date shifts in Malaysia (UTC+8).
+  const todayLocalDate = (() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  })();
 
   const selectedDaySummary = useMemo(() => {
     if (!data?.dailyDepotMetrics || dailyDateFilter === 'ALL') return null;
@@ -984,7 +991,7 @@ export const ExecutiveDashboard: React.FC = () => {
                       type="date"
                       value={dailyDateFilter === 'ALL' ? '' : dailyDateFilter}
                       min={minDailyDate}
-                      max={maxDailyDate}
+                      max={todayLocalDate}
                       onChange={e => setDailyDateFilter(e.target.value || 'ALL')}
                       className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-mono font-bold rounded-lg pl-2.5 pr-7 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer"
                       title="Pick a specific date to view that day's compliance, defect rate, and grounded fleet"
