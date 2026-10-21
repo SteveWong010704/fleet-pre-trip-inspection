@@ -111,8 +111,32 @@ export const AdminAuth: React.FC<AdminAuthProps> = ({ onAuthenticated }) => {
           </button>
         </form>
 
+        {/* Quick Credentials Helper */}
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs space-y-1.5">
+          <div className="flex items-center justify-between text-[11px] text-slate-500 font-bold uppercase tracking-wider">
+            <span>Global Administrator Access</span>
+            <button
+              type="button"
+              onClick={() => {
+                setUsername('steve');
+                setPassword('2580Qwer!@#');
+              }}
+              className="text-blue-600 hover:text-blue-800 font-semibold cursor-pointer hover:underline"
+            >
+              Autofill
+            </button>
+          </div>
+          <div className="flex items-center justify-between text-xs font-mono text-slate-700 bg-white p-2 rounded-lg border border-slate-200">
+            <span>user: <strong className="text-slate-900">steve</strong></span>
+            <span>pass: <strong className="text-slate-900">2580Qwer!@#</strong></span>
+          </div>
+          <p className="text-[10px] text-slate-400">
+            Role-Based Access Control: Sign in with your assigned position (Global Admin, Logistic Admin, Sales Operation, etc.)
+          </p>
+        </div>
+
         <div className="text-center text-[11px] text-slate-400 border-t border-slate-100 pt-4">
-          <span>Protected by Fleet Security & Rate Limiter</span>
+          <span>Protected by Fleet Security & RBAC Matrix Engine</span>
         </div>
       </div>
     </div>

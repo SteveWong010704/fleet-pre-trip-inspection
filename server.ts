@@ -42,11 +42,37 @@ import {
   clearAllFleetData,
   clearAllVehicles,
   clearAllDrivers,
+  purgeAllDemoData,
+  getDemoStatus,
   getSettings,
   updateSettings,
   pruneOldInspections,
   getDatabaseStatus,
+  getExecutiveAnalytics,
+  seedHistoricalInspections,
+  getRegions,
+  createRegion,
+  updateRegion,
+  deleteRegion,
+  getDepots,
+  createDepot,
+  updateDepot,
+  deleteDepot,
+  getRoutes,
+  createRoute,
+  updateRoute,
+  deleteRoute,
+  syncRoutes,
+  getRbacRoles,
+  createRbacRole,
+  updateRbacRole,
+  deleteRbacRole,
+  getRbacUsers,
+  createRbacUser,
+  updateRbacUser,
+  deleteRbacUser,
 } from './server/storage';
+import { ADMIN_FEATURES } from './src/types';
 import {
   initBackupService,
   getBackupStatus,
@@ -738,6 +764,230 @@ async function startServer() {
     }
   });
 
+  // Executive Compliance & Fleet Analytics
+  app.get('/api/analytics', (req, res) => {
+    try {
+      const { timeframe, branch, truckCategory, dateFrom, dateTo } = req.query;
+      const analytics = getExecutiveAnalytics({
+        timeframe: timeframe as string,
+        branch: branch as string,
+        truckCategory: truckCategory as string,
+        dateFrom: dateFrom as string,
+        dateTo: dateTo as string,
+      });
+      res.json({ success: true, data: analytics });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Seed / Refresh demo historical inspection records for executive analytics
+  app.post('/api/analytics/seed-demo', (req, res) => {
+    try {
+      const daysBack = Number(req.body?.daysBack) || 30;
+      const result = seedHistoricalInspections(daysBack);
+      res.json({ success: true, message: `Successfully seeded ${result.seededCount} historical inspections for 30-day analytics.`, ...result });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ----------------- OPERATIONS HIERARCHY API (REGIONS, DEPOTS, ROUTES) -----------------
+  app.get('/api/operations/regions', (req, res) => {
+    try {
+      res.json({ success: true, data: getRegions() });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/operations/regions', requireAdmin, (req, res) => {
+    try {
+      const created = createRegion(req.body);
+      res.json({ success: true, data: created });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.put('/api/operations/regions/:id', requireAdmin, (req, res) => {
+    try {
+      const updated = updateRegion(req.params.id, req.body);
+      res.json({ success: true, data: updated });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/operations/regions/:id', requireAdmin, (req, res) => {
+    try {
+      const deleted = deleteRegion(req.params.id);
+      res.json({ success: true, deleted });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/operations/depots', (req, res) => {
+    try {
+      res.json({ success: true, data: getDepots() });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/operations/depots', requireAdmin, (req, res) => {
+    try {
+      const created = createDepot(req.body);
+      res.json({ success: true, data: created });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.put('/api/operations/depots/:id', requireAdmin, (req, res) => {
+    try {
+      const updated = updateDepot(req.params.id, req.body);
+      res.json({ success: true, data: updated });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/operations/depots/:id', requireAdmin, (req, res) => {
+    try {
+      const deleted = deleteDepot(req.params.id);
+      res.json({ success: true, deleted });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/operations/routes', (req, res) => {
+    try {
+      res.json({ success: true, data: getRoutes() });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/operations/routes', requireAdmin, (req, res) => {
+    try {
+      const created = createRoute(req.body);
+      res.json({ success: true, data: created });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.put('/api/operations/routes/:id', requireAdmin, (req, res) => {
+    try {
+      const updated = updateRoute(req.params.id, req.body);
+      res.json({ success: true, data: updated });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/operations/routes/:id', requireAdmin, (req, res) => {
+    try {
+      const deleted = deleteRoute(req.params.id);
+      res.json({ success: true, deleted });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/operations/routes/sync', requireAdmin, (req, res) => {
+    try {
+      const syncRes = syncRoutes();
+      res.json({ success: true, ...syncRes });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ================= RBAC & USER MANAGEMENT ENDPOINTS =================
+  app.get('/api/rbac/features', requireAdmin, (req, res) => {
+    res.json({ success: true, features: ADMIN_FEATURES });
+  });
+
+  app.get('/api/rbac/roles', requireAdmin, (req, res) => {
+    try {
+      const roles = getRbacRoles();
+      res.json({ success: true, roles });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/rbac/roles', requireAdmin, (req, res) => {
+    try {
+      const { name, description, permissions } = req.body;
+      const role = createRbacRole({ name, description, permissions });
+      res.status(201).json({ success: true, role });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.put('/api/rbac/roles/:id', requireAdmin, (req, res) => {
+    try {
+      const { name, description, permissions } = req.body;
+      const role = updateRbacRole(req.params.id, { name, description, permissions });
+      res.json({ success: true, role });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/rbac/roles/:id', requireAdmin, (req, res) => {
+    try {
+      const success = deleteRbacRole(req.params.id);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/rbac/users', requireAdmin, (req, res) => {
+    try {
+      const users = getRbacUsers();
+      res.json({ success: true, users });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/rbac/users', requireAdmin, (req, res) => {
+    try {
+      const { username, name, password, role, assignedDepot } = req.body;
+      const user = createRbacUser({ username, name, password, role, assignedDepot });
+      res.status(201).json({ success: true, user });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.put('/api/rbac/users/:username', requireAdmin, (req, res) => {
+    try {
+      const { name, password, role, assignedDepot, active } = req.body;
+      const user = updateRbacUser(req.params.username, { name, password, role, assignedDepot, active });
+      res.json({ success: true, user });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/rbac/users/:username', requireAdmin, (req, res) => {
+    try {
+      const success = deleteRbacUser(req.params.username);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
   // Vehicles list with filters (Mask sensitive fuel PIN and QR security token for non-admins)
   app.get('/api/vehicles', (req, res) => {
     try {
@@ -1203,6 +1453,26 @@ async function startServer() {
     try {
       const result = clearAllDrivers();
       res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Purge all demo seed data (Admin protected)
+  app.post('/api/storage/purge-demo', requireAdmin, (req, res) => {
+    try {
+      const result = purgeAllDemoData();
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Get demo seed data status
+  app.get('/api/storage/demo-status', (req, res) => {
+    try {
+      const status = getDemoStatus();
+      res.json({ success: true, ...status });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

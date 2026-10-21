@@ -232,7 +232,7 @@ export const INITIAL_VEHICLES: Vehicle[] = [
     ages: 9,
     currentStatus: 'Ready',
     currentOdometer: 182900,
-    assignedRoute: 'Route KJ-01-Kelana',
+    assignedRoute: 'Route KJ-01-Kajang',
   },
   {
     no: 16,
@@ -260,7 +260,7 @@ export const INITIAL_VEHICLES: Vehicle[] = [
     ages: 10,
     currentStatus: 'Pending Inspection',
     currentOdometer: 219400,
-    assignedRoute: 'Route KJ-02-Damansara',
+    assignedRoute: 'Route KJ-02-Kajang',
   },
   {
     no: 17,
@@ -288,7 +288,7 @@ export const INITIAL_VEHICLES: Vehicle[] = [
     ages: 3,
     currentStatus: 'Ready',
     currentOdometer: 64120,
-    assignedRoute: 'Route KJ-03-Subang',
+    assignedRoute: 'Route KJ-03-Kajang',
   },
   {
     no: 18,
@@ -316,7 +316,7 @@ export const INITIAL_VEHICLES: Vehicle[] = [
     ages: 7,
     currentStatus: 'Pending Inspection',
     currentOdometer: 145000,
-    assignedRoute: 'Route KJ-04-Sunway',
+    assignedRoute: 'Route KJ-04-Kajang',
   },
   {
     no: 43,
@@ -934,7 +934,7 @@ export const INITIAL_DRIVERS: Driver[] = [
   {
     no: 28,
     depot: 'KJ',
-    depotName: 'KELANA JAYA',
+    depotName: 'KAJANG',
     employeeId: 'KJ8802',
     loginId: '8802',
     password: 'password',

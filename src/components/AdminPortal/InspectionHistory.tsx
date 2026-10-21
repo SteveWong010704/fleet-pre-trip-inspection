@@ -589,7 +589,7 @@ export const InspectionHistory: React.FC = () => {
     }
 
     // Single Worksheet: All checkpoints listed vertically.
-    // When a defect exists, Defect Tag and Defect Remark are split into 2 distinct rows (拆成2行, no 2 data in one row).
+    // When a defect exists, Defect Tag and Defect Remark are split into 2 distinct rows.
     let rowSequence = 0;
     const auditRows: any[] = [];
 
@@ -634,7 +634,7 @@ export const InspectionHistory: React.FC = () => {
               'Vehicle Overall Status': isGrounded ? 'GROUNDED' : 'Ready (Good)',
             });
 
-            // Row 2: Defect Remark (拆成第2行，不放2个data在同一行)
+            // Row 2: Defect Remark (distinct line item)
             rowSequence++;
             auditRows.push({
               'No.': rowSequence,
@@ -691,7 +691,7 @@ export const InspectionHistory: React.FC = () => {
       });
     });
 
-    // Create workbook with ONLY ONE single tab as requested (不用那么多tab, 一个就好)
+    // Create workbook with ONLY ONE single tab as requested
     const workbook = XLSX.utils.book_new();
     const wsAudit = XLSX.utils.json_to_sheet(auditRows);
     wsAudit['!cols'] = [
@@ -796,7 +796,7 @@ export const InspectionHistory: React.FC = () => {
               `"${isGrounded ? 'GROUNDED' : 'Ready (Good)'}"`,
             ]);
 
-            // Row 2: Defect Remark (拆成第2行)
+            // Row 2: Defect Remark (distinct line item)
             rowNum++;
             rows.push([
               rowNum,
