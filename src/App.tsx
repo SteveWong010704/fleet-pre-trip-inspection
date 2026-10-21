@@ -440,7 +440,8 @@ export default function App() {
               <>
                 {/* Admin Sub-Tabs */}
                 <div className="flex flex-wrap items-center gap-2 p-1.5 bg-white border border-slate-200 rounded-2xl shadow-sm no-print">
-                  <button
+                  {permittedTabs.includes('analytics') && (
+<button
                     onClick={() => setAdminTab('analytics')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'analytics' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -449,8 +450,10 @@ export default function App() {
                     <TrendingUp className="w-4 h-4" />
                     <span>Executive Analytics</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('fleet') && (
+<button
                     onClick={() => setAdminTab('fleet')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'fleet' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -459,8 +462,10 @@ export default function App() {
                     <Truck className="w-4 h-4" />
                     <span>Vehicles Catalog</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('drivers') && (
+<button
                     onClick={() => setAdminTab('drivers')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'drivers' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -469,8 +474,10 @@ export default function App() {
                     <Users className="w-4 h-4" />
                     <span>Drivers & Accounts</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('operations') && (
+<button
                     onClick={() => setAdminTab('operations')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'operations' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -479,8 +486,10 @@ export default function App() {
                     <Route className="w-4 h-4" />
                     <span>Manage Route, Depo, Region</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('history') && (
+<button
                     onClick={() => setAdminTab('history')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'history' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -489,8 +498,10 @@ export default function App() {
                     <ClipboardList className="w-4 h-4" />
                     <span>Inspection Audit & Export</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('bulk') && (
+<button
                     onClick={() => setAdminTab('bulk')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'bulk' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -499,8 +510,10 @@ export default function App() {
                     <Send className="w-4 h-4" />
                     <span>Bulk Upload & Auto-QR</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('qr') && (
+<button
                     onClick={() => setAdminTab('qr')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'qr' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -509,8 +522,10 @@ export default function App() {
                     <FileCheck className="w-4 h-4" />
                     <span>QR Label Generator</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('logs') && (
+<button
                     onClick={() => setAdminTab('logs')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'logs' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -519,8 +534,10 @@ export default function App() {
                     <ShieldCheck className="w-4 h-4" />
                     <span>Security Audit Logs</span>
                   </button>
+                  )}
 
-                  <button
+                  {permittedTabs.includes('backup') && (
+<button
                     onClick={() => setAdminTab('backup')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
                       adminTab === 'backup' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -529,6 +546,18 @@ export default function App() {
                     <HardDrive className="w-4 h-4" />
                     <span>Daily Backup (C:\ Drive)</span>
                   </button>
+                  )}
+                  {permittedTabs.includes('users') && (
+                    <button
+                      onClick={() => setAdminTab('users')}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                        adminTab === 'users' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                    >
+                      <UserCheck className="w-4 h-4" />
+                      <span>User Management & RBAC</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Sub-Tab View Rendering */}
@@ -541,6 +570,7 @@ export default function App() {
                 {adminTab === 'qr' && <QrCodeGenerator />}
                 {adminTab === 'logs' && <AuditLogViewer />}
                 {adminTab === 'backup' && <BackupRetentionManager />}
+                {adminTab === 'users' && permittedTabs.includes('users') && <UserManagement />}
               </>
             )}
           </div>
