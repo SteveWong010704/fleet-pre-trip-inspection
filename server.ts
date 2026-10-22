@@ -366,7 +366,7 @@ async function startServer() {
   initBackupService();
 
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // Security hardening: hide Express identity
   app.disable('x-powered-by');

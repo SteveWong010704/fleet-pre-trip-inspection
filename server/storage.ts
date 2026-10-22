@@ -1022,32 +1022,75 @@ export {
   deleteRbacUser,
 };
 
-// Helper to extract calendar date string (YYYY-MM-DD) in local / Asia/Kuala_Lumpur timezone
-export function getCalendarDateString(date: Date | string = new Date()): string {
+// Helper to extract calendar date string (YYYY-MM-DD) in local / Asia/Kuala_Lumpur (UTC+8) timezone
+export function getCalendarDateString(val: Date | string | InspectionRecord | any = new Date()): string {
+  if (!val) return '';
+
+  // 1. If an inspection object is passed, follow Inspection Audit (formattedDate first)
+  if (typeof val === 'object' && !(val instanceof Date)) {
+    const formatted = String(val.formattedDate || val.FormattedDate || '').trim();
+    if (formatted) {
+      const dmy = formatted.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+      if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+      const ymd = formatted.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+      if (ymd) return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+    }
+    const raw = val.timestamp ?? val.Timestamp;
+    if (raw) return getCalendarDateString(raw);
+    const idMatch = String(val.id || val.InspectionId || '').match(/INSP-(\d{4})(\d{2})(\d{2})/i);
+    if (idMatch) return `${idMatch[1]}-${idMatch[2]}-${idMatch[3]}`;
+    return '';
+  }
+
+  // 2. If a string is passed
+  if (typeof val === 'string') {
+    const s = val.trim();
+    if (!s) return '';
+    // Check DD/MM/YYYY format
+    const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+    // Check YYYY-MM-DD local format without Z or timezone offset
+    const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (ymd && !s.includes('Z') && !/[+\-]\d{2}:?\d{2}$/.test(s)) {
+      return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
+    }
+    try {
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) {
+        return new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Asia/Kuala_Lumpur',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(d);
+      }
+    } catch {}
+    return ymd ? `${ymd[1]}-${ymd[2]}-${ymd[3]}` : '';
+  }
+
+  // 3. Date instance
   try {
-    const d = typeof date === 'string' ? new Date(date) : date;
-    if (isNaN(d.getTime())) return '';
+    if (isNaN(val.getTime())) return '';
     return new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Asia/Kuala_Lumpur',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
-    }).format(d);
+    }).format(val);
   } catch {
-    const d = typeof date === 'string' ? new Date(date) : date;
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const day = String(val.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   }
 }
 
-// Helper to check if two dates/timestamps are on the exact same calendar day
-export function isSameDay(isoTimestamp: string, targetDate: Date | string = new Date()): boolean {
-  if (!isoTimestamp) return false;
+// Helper to check if two dates/timestamps/records are on the exact same calendar day in UTC+8
+export function isSameDay(val1: any, val2: any = new Date()): boolean {
+  if (!val1) return false;
   try {
-    const date1 = getCalendarDateString(isoTimestamp);
-    const date2 = getCalendarDateString(targetDate);
+    const date1 = getCalendarDateString(val1);
+    const date2 = getCalendarDateString(val2);
     return Boolean(date1 && date2 && date1 === date2);
   } catch {
     return false;
@@ -1076,7 +1119,7 @@ export function getDriverDailyInspections(driverIdentifier: string): InspectionR
       inspDriverId === clean ||
       (employeeId && inspDriverId === employeeId) ||
       (loginId && inspDriverId === loginId);
-    return isSameDriver && isSameDay(i.timestamp, now);
+    return isSameDriver && isSameDay(i, now);
   });
 }
 
@@ -1120,7 +1163,7 @@ export function getVehicleDailyInspection(vehicleNo: string): InspectionRecord |
   const now = new Date();
   const existing = memoryStore.inspections.find(i => {
     const isSameVehicle = (i.vehicleNo || '').trim().toUpperCase().replace(/\s+/g, '') === cleanPlate;
-    return isSameVehicle && isSameDay(i.timestamp, now);
+    return isSameVehicle && isSameDay(i, now);
   });
   return existing || null;
 }
@@ -1155,13 +1198,13 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
     throw new Error(`Vehicle Already Inspected Today: Truck ${inspectionData.vehicleNo} has already completed daily inspection for date ${todayStr} (Cert #${existingVehicleToday.id}) by driver ${existingVehicleToday.driverName || existingVehicleToday.driverId}. Each truck is limited to 1 inspection per calendar day.`);
   }
 
-  const timestamp = new Date().toISOString();
   const dateObj = new Date();
-  const dateStr = dateObj.toISOString().slice(0, 10);
+  const timestamp = dateObj.toISOString(); // Store absolute timestamp in UTC; convert for business dates/display.
+  const dateStr = getCalendarDateString(dateObj);
   const yyyymmdd = dateStr.replace(/-/g, '');
   const seq = String(memoryStore.inspections.length + 1).padStart(4, '0');
   const id = `INSP-${yyyymmdd}-${seq}`;
-  const formattedDate = dateObj.toLocaleString('en-US', { hour12: false });
+  const formattedDate = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(dateObj);
 
   // Standard 10 inspection checkpoints mapping
   const standardCheckpoints: Record<string, { code: number; title: string }> = {
@@ -1426,19 +1469,16 @@ export function getInspections(filters?: {
 
   if (filters?.date) {
     const d = filters.date.trim();
-    list = list.filter(r => r.timestamp.slice(0, 10) === d || (r.formattedDate || '').includes(d));
+    list = list.filter(r => getCalendarDateString(r) === d);
   }
 
-  if (filters?.dateFrom) {
-    const fromTime = new Date(filters.dateFrom).getTime();
-    list = list.filter(r => new Date(r.timestamp).getTime() >= fromTime);
-  }
-
-  if (filters?.dateTo) {
-    const toDate = new Date(filters.dateTo);
-    toDate.setHours(23, 59, 59, 999);
-    const toTime = toDate.getTime();
-    list = list.filter(r => new Date(r.timestamp).getTime() <= toTime);
+  if (filters?.dateFrom || filters?.dateTo) {
+    const fromKey = filters?.dateFrom?.trim() || '';
+    const toKey = filters?.dateTo?.trim() || '9999-12-31';
+    list = list.filter(r => {
+      const localDateKey = getCalendarDateString(r);
+      return Boolean(localDateKey) && localDateKey >= fromKey && localDateKey <= toKey;
+    });
   }
 
   return list;
@@ -1692,7 +1732,7 @@ export function getFleetStats(filters?: { branch?: string; date?: string; route?
 
   // Filter inspections on the selected date (strictly matching local calendar day YYYY-MM-DD)
   const dateInspections = memoryStore.inspections.filter(i => {
-    return isSameDay(i.timestamp, selectedDate);
+    return isSameDay(i, selectedDate);
   });
 
   // Map of inspected vehicle plates on this date
@@ -1832,7 +1872,7 @@ export function bulkImportInspections(inspectionsList: Partial<InspectionRecord>
     const yyyymmdd = validDate.toISOString().slice(0, 10).replace(/-/g, '');
     const seq = String(memoryStore.inspections.length + added + 1).padStart(4, '0');
     const id = raw.id || `INSP-${yyyymmdd}-${seq}`;
-    const formattedDate = raw.formattedDate || validDate.toLocaleString('en-US', { hour12: false });
+    const formattedDate = raw.formattedDate || new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(validDate);
 
     // Build or sanitize checklist items
     const items = (raw.items && raw.items.length > 0)
