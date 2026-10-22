@@ -22,6 +22,7 @@ import {
   Trash2,
   Search,
   X,
+  Clock,
 } from 'lucide-react';
 import { ExecutiveAnalyticsData, DailyTrendPoint, DepotRankingItem, DefectHotspotItem, DailyDepotMetric } from '../../types';
 import { fetchExecutiveAnalytics, seedDemoInspections, fetchDepots, purgeDemoDataApi, fetchDemoStatus } from '../../lib/api';
@@ -33,8 +34,10 @@ export const ExecutiveDashboard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [masterDepots, setMasterDepots] = useState<string[]>([]);
 
-  // Filter States
-  const [timeframe, setTimeframe] = useState<'7d' | '14d' | '30d' | 'all'>('30d');
+  // Filter States (Synchronized with Inspection Audit in UTC+8)
+  const [timeframe, setTimeframe] = useState<'today' | 'yesterday' | '7d' | '14d' | '30d' | 'all' | 'custom'>('30d');
+  const [customDateFrom, setCustomDateFrom] = useState<string>('');
+  const [customDateTo, setCustomDateTo] = useState<string>('');
   const [selectedBranch, setSelectedBranch] = useState<string>('ALL');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   
@@ -68,7 +71,9 @@ export const ExecutiveDashboard: React.FC = () => {
       setError(null);
       const [res, dStatus] = await Promise.all([
         fetchExecutiveAnalytics({
-          timeframe,
+          timeframe: timeframe === 'custom' ? undefined : timeframe,
+          dateFrom: timeframe === 'custom' ? customDateFrom : undefined,
+          dateTo: timeframe === 'custom' ? customDateTo : undefined,
           branch: selectedBranch,
           truckCategory: selectedCategory,
         }),
@@ -103,8 +108,11 @@ export const ExecutiveDashboard: React.FC = () => {
   }, [masterDepots, data]);
 
   useEffect(() => {
+    if (timeframe === 'custom' && (!customDateFrom || !customDateTo)) {
+      return;
+    }
     loadAnalytics();
-  }, [timeframe, selectedBranch, selectedCategory]);
+  }, [timeframe, customDateFrom, customDateTo, selectedBranch, selectedCategory]);
 
   useEffect(() => {
     setDailyPage(1);
@@ -175,10 +183,19 @@ export const ExecutiveDashboard: React.FC = () => {
   }, [data?.dailyDepotMetrics]);
 
   // The date picker must allow today even when no inspection has been submitted yet.
-  // Use a local YYYY-MM-DD value to avoid UTC date shifts in Malaysia (UTC+8).
+  // Use Asia/Kuala_Lumpur (UTC+8) YYYY-MM-DD value to strictly match Inspection Audit.
   const todayLocalDate = (() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Kuala_Lumpur',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+    } catch {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    }
   })();
 
   const selectedDaySummary = useMemo(() => {
@@ -246,6 +263,10 @@ export const ExecutiveDashboard: React.FC = () => {
             </h1>
             <span className="text-xs font-mono font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
               APAD Act 715
+            </span>
+            <span className="text-xs font-mono font-bold text-emerald-800 bg-emerald-50 border border-emerald-300 px-2.5 py-0.5 rounded flex items-center gap-1.5" title="All cards and audits are calculated strictly in Malaysia Standard Time UTC+08:00 matching Inspection Audit">
+              <Clock className="w-3.5 h-3.5 text-emerald-600" />
+              <span>UTC+8 (Inspection Audit Synced)</span>
             </span>
             {demoStatus?.isDemoActive ? (
               <span className="text-xs font-mono font-bold text-amber-800 bg-amber-50 border border-amber-300 px-2 py-0.5 rounded flex items-center gap-1">
@@ -322,21 +343,30 @@ export const ExecutiveDashboard: React.FC = () => {
 
       {/* 2. Filter & Timeframe Toolbar */}
       <div className="bg-white border border-slate-200 rounded-2xl p-3.5 shadow-sm flex flex-wrap items-center justify-between gap-3">
-        {/* Timeframe Segmented Control */}
-        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
-          {(['7d', '14d', '30d', 'all'] as const).map(tf => {
-            const labelMap = {
+        {/* Timeframe Segmented Control (UTC+8) */}
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-xl">
+          {(['today', 'yesterday', '7d', '14d', '30d', 'all', 'custom'] as const).map(tf => {
+            const labelMap: Record<string, string> = {
+              'today': 'Today (UTC+8)',
+              'yesterday': 'Yesterday',
               '7d': 'Last 7 Days',
               '14d': 'Last 14 Days',
-              '30d': 'Last 30 Days (Monthly)',
+              '30d': 'Last 30 Days',
               'all': 'All Records',
+              'custom': 'Custom Range',
             };
             const active = timeframe === tf;
             return (
               <button
                 key={tf}
-                onClick={() => setTimeframe(tf)}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                onClick={() => {
+                  setTimeframe(tf);
+                  if (tf === 'custom' && !customDateFrom) {
+                    setCustomDateFrom(todayLocalDate);
+                    setCustomDateTo(todayLocalDate);
+                  }
+                }}
+                className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
                   active ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
@@ -345,6 +375,34 @@ export const ExecutiveDashboard: React.FC = () => {
             );
           })}
         </div>
+
+        {/* Custom Range Picker matching Inspection Audit */}
+        {timeframe === 'custom' && (
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-300 px-3 py-1.5 rounded-xl text-xs shadow-inner">
+            <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 font-bold uppercase text-[10px]">From:</span>
+              <input
+                type="date"
+                value={customDateFrom}
+                max={customDateTo || todayLocalDate}
+                onChange={e => setCustomDateFrom(e.target.value)}
+                className="bg-white border border-slate-300 text-slate-800 text-xs font-medium rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+              />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 font-bold uppercase text-[10px]">To:</span>
+              <input
+                type="date"
+                value={customDateTo}
+                min={customDateFrom}
+                max={todayLocalDate}
+                onChange={e => setCustomDateTo(e.target.value)}
+                className="bg-white border border-slate-300 text-slate-800 text-xs font-medium rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+              />
+            </div>
+          </div>
+        )}
 
         {/* Dropdown Filters */}
         <div className="flex flex-wrap items-center gap-3">
@@ -405,6 +463,23 @@ export const ExecutiveDashboard: React.FC = () => {
         </div>
       ) : data ? (
         <>
+          {/* Active Period & Scope Indicator (UTC+8) */}
+          <div className="flex flex-wrap items-center justify-between text-xs text-slate-500 font-medium px-1 gap-2">
+            <div className="flex items-center gap-2 font-mono">
+              <Calendar className="w-3.5 h-3.5 text-blue-600" />
+              <span className="font-bold text-slate-700">Audit Scope (UTC+8):</span>
+              <span className="text-blue-700 font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                {data.meta.startDate === data.meta.endDate ? data.meta.startDate : `${data.meta.startDate} to ${data.meta.endDate}`}
+              </span>
+              <span className="text-slate-400 font-sans text-[11px]">
+                (Analysis synchronized with Inspection Audit Date & Time)
+              </span>
+            </div>
+            <div className="text-slate-400 font-mono text-[11px]">
+              Timezone: Asia/Kuala_Lumpur
+            </div>
+          </div>
+
           {/* 3. Executive KPI Metric Strip */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Card 1: Route Compliance Rate */}
