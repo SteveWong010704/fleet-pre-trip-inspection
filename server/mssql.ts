@@ -539,7 +539,7 @@ export async function dbLoadInspections(): Promise<InspectionRecord[]> {
     const result = await pool.request().query`
       SELECT 
         InspectionId AS id,
-        CONVERT(NVARCHAR(30), [Timestamp], 126) + 'Z' AS [timestamp],
+        CONVERT(NVARCHAR(30), [Timestamp], 127) AS [timestamp],
         FormattedDate AS formattedDate,
         DriverId AS driverId,
         DriverName AS driverName,
@@ -675,7 +675,7 @@ export async function dbSaveInspection(record: InspectionRecord): Promise<void> 
     const req = pool.request();
     req.input('InspectionId', sql.NVarChar(50), record.id);
     req.input('Timestamp', sql.DateTime2, new Date(record.timestamp || Date.now()));
-    req.input('FormattedDate', sql.NVarChar(50), record.formattedDate || new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date()));
+    req.input('FormattedDate', sql.NVarChar(50), record.formattedDate || new Date().toLocaleString());
     req.input('DriverId', sql.NVarChar(50), effectiveDriverId || null);
     req.input('DriverName', sql.NVarChar(150), record.driverName || 'Driver');
     req.input('DriverDesignation', sql.NVarChar(50), record.driverDesignation || 'DRIVER');
@@ -877,7 +877,7 @@ export async function dbLoadAuditLogs(): Promise<AuditLog[]> {
     const result = await pool.request().query`
       SELECT TOP 200
         LogId AS id,
-        CONVERT(NVARCHAR(30), [Timestamp], 126) + 'Z' AS [timestamp],
+        CONVERT(NVARCHAR(30), [Timestamp], 127) AS [timestamp],
         EventType AS eventType,
         Operator AS operator,
         IpAddress AS ip,

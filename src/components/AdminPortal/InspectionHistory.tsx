@@ -37,32 +37,6 @@ import * as XLSX from 'xlsx';
 import { getCheckpointSystemChecks } from '../../lib/quickChecklistConfig';
 import { SecurityPasswordModal } from '../SecurityPasswordModal';
 
-const FOMS_TIME_ZONE = 'Asia/Kuala_Lumpur';
-const formatMalaysiaDateTime = (value?: string) => {
-  if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('en-GB', {
-    timeZone: FOMS_TIME_ZONE, day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  }).format(date);
-};
-const malaysiaDateKey = (value?: string) => {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: FOMS_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
-  const get = (type: string) => parts.find(p => p.type === type)?.value || '';
-  return `${get('year')}-${get('month')}-${get('day')}`;
-};
-const malaysiaTimeKey = (value?: string) => {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: FOMS_TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(date);
-  const get = (type: string) => parts.find(p => p.type === type)?.value || '00';
-  return `${get('hour')}:${get('minute')}`;
-};
-
 export const InspectionHistory: React.FC = () => {
   const [inspections, setInspections] = useState<InspectionRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -100,7 +74,7 @@ export const InspectionHistory: React.FC = () => {
     img.dataset.fallbackTried = String(attempts + 1);
 
     if (!activeRecord) return;
-    const dateStr = activeRecord.timestamp ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(activeRecord.timestamp)) : '';
+    const dateStr = activeRecord.timestamp ? activeRecord.timestamp.slice(0, 10) : '';
     const cleanPlate = (activeRecord.vehicleNo || '').trim().toUpperCase().replace(/[^a-zA-Z0-9]/g, '_');
     const baseName = (photoUrl || img.src).split('/').pop() || '';
 
@@ -208,8 +182,11 @@ export const InspectionHistory: React.FC = () => {
 
       // 5. Time filter (e.g. 08:00 to 17:00)
       if (timeFrom || timeTo) {
-        const recordTime = malaysiaTimeKey(r.timestamp);
-        if (recordTime) {
+        const dateObj = new Date(r.timestamp);
+        if (!isNaN(dateObj.getTime())) {
+          const hours = String(dateObj.getHours()).padStart(2, '0');
+          const minutes = String(dateObj.getMinutes()).padStart(2, '0');
+          const recordTime = `${hours}:${minutes}`;
           if (timeFrom && recordTime < timeFrom) return false;
           if (timeTo && recordTime > timeTo) return false;
         }
@@ -637,7 +614,7 @@ export const InspectionHistory: React.FC = () => {
               'No.': rowSequence,
               'Inspection Seq': recordIndex + 1,
               'Certificate ID': r.id,
-              'Inspection Date & Time': formatMalaysiaDateTime(r.timestamp) || r.formattedDate,
+              'Inspection Date & Time': r.formattedDate,
               'Vehicle Plate': r.vehicleNo,
               'Vehicle Type': r.truckCategory || 'Small Truck',
               'Branch / Depot': r.vehicleBranch || 'BL',
@@ -663,7 +640,7 @@ export const InspectionHistory: React.FC = () => {
               'No.': rowSequence,
               'Inspection Seq': recordIndex + 1,
               'Certificate ID': r.id,
-              'Inspection Date & Time': formatMalaysiaDateTime(r.timestamp) || r.formattedDate,
+              'Inspection Date & Time': r.formattedDate,
               'Vehicle Plate': r.vehicleNo,
               'Vehicle Type': r.truckCategory || 'Small Truck',
               'Branch / Depot': r.vehicleBranch || 'BL',
@@ -691,7 +668,7 @@ export const InspectionHistory: React.FC = () => {
             'No.': rowSequence,
             'Inspection Seq': recordIndex + 1,
             'Certificate ID': r.id,
-            'Inspection Date & Time': formatMalaysiaDateTime(r.timestamp) || r.formattedDate,
+            'Inspection Date & Time': r.formattedDate,
             'Vehicle Plate': r.vehicleNo,
             'Vehicle Type': r.truckCategory || 'Small Truck',
             'Branch / Depot': r.vehicleBranch || 'BL',
@@ -742,7 +719,7 @@ export const InspectionHistory: React.FC = () => {
     ];
     XLSX.utils.book_append_sheet(workbook, wsAudit, 'Vehicle Inspection Audit');
 
-    const timestamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const timestamp = new Date().toISOString().slice(0, 10);
     XLSX.writeFile(workbook, `Fleet_Vehicle_Inspection_Audit_${timestamp}.xlsx`);
   };
 
@@ -799,7 +776,7 @@ export const InspectionHistory: React.FC = () => {
               rowNum,
               recordIndex + 1,
               `"${r.id}"`,
-              `"${formatMalaysiaDateTime(r.timestamp) || r.formattedDate}"`,
+              `"${r.formattedDate}"`,
               `"${r.vehicleNo}"`,
               `"${r.truckCategory || 'Small Truck'}"`,
               `"${r.vehicleBranch || 'BL'}"`,
@@ -825,7 +802,7 @@ export const InspectionHistory: React.FC = () => {
               rowNum,
               recordIndex + 1,
               `"${r.id}"`,
-              `"${formatMalaysiaDateTime(r.timestamp) || r.formattedDate}"`,
+              `"${r.formattedDate}"`,
               `"${r.vehicleNo}"`,
               `"${r.truckCategory || 'Small Truck'}"`,
               `"${r.vehicleBranch || 'BL'}"`,
@@ -852,7 +829,7 @@ export const InspectionHistory: React.FC = () => {
             rowNum,
             recordIndex + 1,
             `"${r.id}"`,
-            `"${formatMalaysiaDateTime(r.timestamp) || r.formattedDate}"`,
+            `"${r.formattedDate}"`,
             `"${r.vehicleNo}"`,
             `"${r.truckCategory || 'Small Truck'}"`,
             `"${r.vehicleBranch || 'BL'}"`,
@@ -884,7 +861,7 @@ export const InspectionHistory: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `Fleet_Vehicle_Inspection_Audit_${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())}.csv`);
+    link.setAttribute('download', `Fleet_Vehicle_Inspection_Audit_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -973,7 +950,7 @@ export const InspectionHistory: React.FC = () => {
     const tableBody = filteredInspections.map((r, i) => [
       i + 1,
       r.id,
-      formatMalaysiaDateTime(r.timestamp) || r.formattedDate,
+      r.formattedDate,
       r.vehicleNo,
       r.vehicleBranch || 'BL',
       r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01'),
@@ -1039,7 +1016,7 @@ export const InspectionHistory: React.FC = () => {
       ]]
     });
 
-    const timestamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const timestamp = new Date().toISOString().slice(0, 10);
     doc.save(`Fleet_Inspection_Audit_${timestamp}.pdf`);
   };
 
@@ -1550,7 +1527,7 @@ export const InspectionHistory: React.FC = () => {
                         <div className="text-[10px] text-slate-400 font-mono">ID: {r.driverId}</div>
                       </td>
                       <td className="px-3.5 py-3 text-slate-600 font-mono text-[11px]">
-                        {formatMalaysiaDateTime(r.timestamp) || r.formattedDate}
+                        {r.formattedDate}
                       </td>
                       <td className="px-3.5 py-3 font-mono">
                         <div className="font-medium text-slate-800">{r.odometer.toLocaleString()} KM</div>
@@ -1724,7 +1701,7 @@ export const InspectionHistory: React.FC = () => {
               </div>
               <div>
                 <span className="text-slate-400 block text-[10px] font-bold tracking-wider uppercase">TIMESTAMP & AREA</span>
-                <div className="text-slate-900 font-medium text-xs mt-0.5">{formatMalaysiaDateTime(activeRecord.timestamp) || activeRecord.formattedDate}</div>
+                <div className="text-slate-900 font-medium text-xs mt-0.5">{activeRecord.formattedDate}</div>
                 <div className="text-[11px] text-slate-600 font-medium">Branch: <strong className="text-slate-800">{activeRecord.vehicleBranch || 'BL'}</strong></div>
                 <div className="text-[11px] text-blue-700 font-bold font-mono">Route / Area: {activeRecord.route || (activeRecord.vehicleBranch ? `${activeRecord.vehicleBranch}01` : 'BL01')}</div>
               </div>
@@ -2487,7 +2464,7 @@ export const InspectionHistory: React.FC = () => {
                   )}
                 </h4>
                 <div className="text-[11px] text-slate-400 font-mono">
-                  {formatMalaysiaDateTime(previewPhoto.timestamp)}
+                  {previewPhoto.timestamp ? new Date(previewPhoto.timestamp).toLocaleString() : ''}
                 </div>
               </div>
               <button

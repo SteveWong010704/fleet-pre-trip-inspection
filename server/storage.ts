@@ -1155,13 +1155,13 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
     throw new Error(`Vehicle Already Inspected Today: Truck ${inspectionData.vehicleNo} has already completed daily inspection for date ${todayStr} (Cert #${existingVehicleToday.id}) by driver ${existingVehicleToday.driverName || existingVehicleToday.driverId}. Each truck is limited to 1 inspection per calendar day.`);
   }
 
+  const timestamp = new Date().toISOString();
   const dateObj = new Date();
-  const timestamp = dateObj.toISOString(); // Store absolute timestamp in UTC; convert for business dates/display.
-  const dateStr = getCalendarDateString(dateObj);
+  const dateStr = dateObj.toISOString().slice(0, 10);
   const yyyymmdd = dateStr.replace(/-/g, '');
   const seq = String(memoryStore.inspections.length + 1).padStart(4, '0');
   const id = `INSP-${yyyymmdd}-${seq}`;
-  const formattedDate = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(dateObj);
+  const formattedDate = dateObj.toLocaleString('en-US', { hour12: false });
 
   // Standard 10 inspection checkpoints mapping
   const standardCheckpoints: Record<string, { code: number; title: string }> = {
@@ -1426,16 +1426,19 @@ export function getInspections(filters?: {
 
   if (filters?.date) {
     const d = filters.date.trim();
-    list = list.filter(r => getCalendarDateString(r.timestamp) === d);
+    list = list.filter(r => r.timestamp.slice(0, 10) === d || (r.formattedDate || '').includes(d));
   }
 
-  if (filters?.dateFrom || filters?.dateTo) {
-    const fromKey = filters?.dateFrom?.trim() || '';
-    const toKey = filters?.dateTo?.trim() || '9999-12-31';
-    list = list.filter(r => {
-      const localDateKey = getCalendarDateString(r.timestamp);
-      return Boolean(localDateKey) && localDateKey >= fromKey && localDateKey <= toKey;
-    });
+  if (filters?.dateFrom) {
+    const fromTime = new Date(filters.dateFrom).getTime();
+    list = list.filter(r => new Date(r.timestamp).getTime() >= fromTime);
+  }
+
+  if (filters?.dateTo) {
+    const toDate = new Date(filters.dateTo);
+    toDate.setHours(23, 59, 59, 999);
+    const toTime = toDate.getTime();
+    list = list.filter(r => new Date(r.timestamp).getTime() <= toTime);
   }
 
   return list;
@@ -1829,7 +1832,7 @@ export function bulkImportInspections(inspectionsList: Partial<InspectionRecord>
     const yyyymmdd = validDate.toISOString().slice(0, 10).replace(/-/g, '');
     const seq = String(memoryStore.inspections.length + added + 1).padStart(4, '0');
     const id = raw.id || `INSP-${yyyymmdd}-${seq}`;
-    const formattedDate = raw.formattedDate || new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(validDate);
+    const formattedDate = raw.formattedDate || validDate.toLocaleString('en-US', { hour12: false });
 
     // Build or sanitize checklist items
     const items = (raw.items && raw.items.length > 0)
