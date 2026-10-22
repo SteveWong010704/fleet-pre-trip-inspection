@@ -1030,8 +1030,16 @@ export function getCalendarDateString(val: Date | string | InspectionRecord | an
   if (typeof val === 'object' && !(val instanceof Date)) {
     const formatted = String(val.formattedDate || val.FormattedDate || '').trim();
     if (formatted) {
-      const dmy = formatted.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-      if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+      const slashDate = formatted.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+      if (slashDate) {
+        const first = Number(slashDate[1]);
+        const second = Number(slashDate[2]);
+        const month = first > 12 && second <= 12 ? second : first;
+        const day = first > 12 && second <= 12 ? first : second;
+        const year = Number(slashDate[3]);
+        const check = new Date(Date.UTC(year, month - 1, day));
+        if (month >= 1 && month <= 12 && day >= 1 && check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
       const ymd = formatted.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
       if (ymd) return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
     }
@@ -1047,8 +1055,16 @@ export function getCalendarDateString(val: Date | string | InspectionRecord | an
     const s = val.trim();
     if (!s) return '';
     // Check DD/MM/YYYY format
-    const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-    if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+    const slashDate = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (slashDate) {
+      const first = Number(slashDate[1]);
+      const second = Number(slashDate[2]);
+      const month = first > 12 && second <= 12 ? second : first;
+      const day = first > 12 && second <= 12 ? first : second;
+      const year = Number(slashDate[3]);
+      const check = new Date(Date.UTC(year, month - 1, day));
+      if (month >= 1 && month <= 12 && day >= 1 && check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
     // Check YYYY-MM-DD local format without Z or timezone offset
     const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (ymd && !s.includes('Z') && !/[+\-]\d{2}:?\d{2}$/.test(s)) {
