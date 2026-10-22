@@ -90,6 +90,37 @@ export interface ExecutiveAnalyticsResult {
   };
 }
 
+
+/** Return the calendar date in Malaysia (UTC+08:00), independent of server timezone.
+ * Inspection Timestamp is stored as UTC; FormattedDate is legacy/display-only and has
+ * inconsistent formats across old and new records, so it must not drive filtering.
+ */
+function getInspectionDateKey(inspection: InspectionRecord): string {
+  const raw = (inspection as any).timestamp ?? (inspection as any).Timestamp;
+  if (raw == null || raw === '') return '';
+  const value = raw instanceof Date ? raw : new Date(String(raw));
+  if (Number.isNaN(value.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(value);
+  const part = (type: string) => parts.find(p => p.type === type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+function formatLocalDateKey(date: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const part = (type: string) => parts.find(p => p.type === type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+function shiftDateKey(dateKey: string, days: number): string {
+  const d = new Date(`${dateKey}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
 // Pure depot codes without town assumptions
 
 
@@ -264,8 +295,8 @@ export function generateHistoricalInspections(
   for (let dayOffset = daysBack; dayOffset >= 0; dayOffset--) {
     const targetDate = new Date(now);
     targetDate.setDate(now.getDate() - dayOffset);
-    const dayOfWeek = targetDate.getDay(); // 0 = Sun, 6 = Sat
-    const dateStr = targetDate.toISOString().slice(0, 10);
+    const dateStr = formatLocalDateKey(targetDate);
+    const dayOfWeek = new Date(`${dateStr}T00:00:00Z`).getUTCDay(); // Malaysia calendar day
     const isSaturday = dayOfWeek === 6;
     const isSunday = dayOfWeek === 0;
 
@@ -295,8 +326,8 @@ export function generateHistoricalInspections(
       const hour = 6 + Math.floor(rand * 2); // 6 or 7
       const minute = Math.floor(rand * 60);
       const second = Math.floor((rand * 100) % 60);
-      const inspDate = new Date(targetDate);
-      inspDate.setHours(hour, minute, second, 0);
+      // Synthetic inspection clock time is Malaysia local time (UTC+08:00).
+      const inspDate = new Date(`${dateStr}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}+08:00`);
 
       const isFeeder = vehicle.truckCategory === 'Feeder' || String(vehicle.model || '').toLowerCase().includes('feeder');
       const isFullAudit = isFeeder || isSaturday;
@@ -410,65 +441,30 @@ export function calculateExecutiveAnalytics(
   const branchFilter = filters?.branch && filters.branch !== 'ALL' ? filters.branch.toUpperCase() : null;
   const categoryFilter = filters?.truckCategory && filters.truckCategory !== 'ALL' ? filters.truckCategory : null;
 
-  // Determine date bounds
-  const now = new Date();
-  let startDate = new Date();
-  let endDate = new Date();
+  // Determine the report range by Malaysia calendar dates, not the server's timezone.
+  const todayKey = formatLocalDateKey(new Date());
+  let startDateKey: string;
+  let endDateKey: string;
 
   if (filters?.dateFrom) {
-    const parts = filters.dateFrom.split('-');
-    if (parts.length === 3) {
-      startDate = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 0, 0, 0, 0);
-    } else {
-      startDate = new Date(filters.dateFrom);
-      startDate.setHours(0, 0, 0, 0);
-    }
-
-    if (filters?.dateTo) {
-      const toParts = filters.dateTo.split('-');
-      if (toParts.length === 3) {
-        endDate = new Date(Number(toParts[0]), Number(toParts[1]) - 1, Number(toParts[2]), 23, 59, 59, 999);
-      } else {
-        endDate = new Date(filters.dateTo);
-        endDate.setHours(23, 59, 59, 999);
-      }
-    } else {
-      // Single date query: end of that same date
-      endDate = new Date(startDate);
-      endDate.setHours(23, 59, 59, 999);
-    }
-  } else if (timeframe === 'today' || timeframe === '1d') {
-    startDate = new Date(now);
-    startDate.setHours(0, 0, 0, 0);
-    endDate = new Date(now);
-    endDate.setHours(23, 59, 59, 999);
-  } else if (timeframe === 'yesterday') {
-    startDate = new Date(now);
-    startDate.setDate(now.getDate() - 1);
-    startDate.setHours(0, 0, 0, 0);
-    endDate = new Date(startDate);
-    endDate.setHours(23, 59, 59, 999);
-  } else if (timeframe === '7d') {
-    startDate.setDate(now.getDate() - 7);
-    startDate.setHours(0, 0, 0, 0);
-    endDate.setHours(23, 59, 59, 999);
-  } else if (timeframe === '14d') {
-    startDate.setDate(now.getDate() - 14);
-    startDate.setHours(0, 0, 0, 0);
-    endDate.setHours(23, 59, 59, 999);
-  } else if (timeframe === 'all') {
-    startDate.setDate(now.getDate() - 120);
-    startDate.setHours(0, 0, 0, 0);
-    endDate.setHours(23, 59, 59, 999);
+    startDateKey = /^\d{4}-\d{2}-\d{2}$/.test(filters.dateFrom) ? filters.dateFrom : todayKey;
+    endDateKey = filters.dateTo && /^\d{4}-\d{2}-\d{2}$/.test(filters.dateTo)
+      ? filters.dateTo : startDateKey;
   } else {
-    // 30d default
-    startDate.setDate(now.getDate() - 30);
-    startDate.setHours(0, 0, 0, 0);
-    endDate.setHours(23, 59, 59, 999);
+    endDateKey = todayKey;
+    const daysBack = timeframe === 'today' || timeframe === '1d' ? 0
+      : timeframe === 'yesterday' ? 1
+      : timeframe === '7d' ? 7
+      : timeframe === '14d' ? 14
+      : timeframe === 'all' ? 120 : 30;
+    startDateKey = shiftDateKey(todayKey, -(daysBack + (daysBack > 0 ? 0 : 0)));
+    if (timeframe === 'yesterday') endDateKey = shiftDateKey(todayKey, -1);
   }
 
-  const startMs = startDate.getTime();
-  const endMs = endDate.getTime();
+  // Date keys are compared lexicographically (YYYY-MM-DD), avoiding UTC/local
+  // midnight drift and making date filters inclusive in Malaysia time.
+  const startDate = new Date(`${startDateKey}T00:00:00Z`);
+  const endDate = new Date(`${endDateKey}T00:00:00Z`);
 
   // Map vehicles by plate. Keep analytics branch/route resolution consistent with
   // getInspections() so records with missing legacy fields are attributed identically
@@ -530,8 +526,8 @@ export function calculateExecutiveAnalytics(
 
   // Filter inspections in date range and vehicle scope
   const scopedInspections = normalizedInspections.filter(insp => {
-    const t = new Date(insp.timestamp).getTime();
-    if (isNaN(t) || t < startMs || t > endMs) return false;
+    const inspectionDateKey = getInspectionDateKey(insp);
+    if (!inspectionDateKey || inspectionDateKey < startDateKey || inspectionDateKey > endDateKey) return false;
     if (branchFilter && (insp.vehicleBranch || '').trim().toUpperCase() !== branchFilter) return false;
     if (categoryFilter && (insp.truckCategory || 'Small Truck') !== categoryFilter) return false;
     return true;
@@ -585,8 +581,10 @@ export function calculateExecutiveAnalytics(
     }
   });
 
-  // Calculate day difference for averages
-  const daysDiff = Math.max(1, Math.round((endMs - startMs) / (1000 * 60 * 60 * 24)));
+  // Inclusive calendar-day count for the selected reporting range.
+  const startDayUtc = Date.parse(`${startDateKey}T00:00:00Z`);
+  const endDayUtc = Date.parse(`${endDateKey}T00:00:00Z`);
+  const daysDiff = Math.max(1, Math.floor((endDayUtc - startDayUtc) / 86400000) + 1);
   const avgInspectionsPerDay = Number((totalInspections / daysDiff).toFixed(1));
 
   // 2. Daily Trends
@@ -594,17 +592,15 @@ export function calculateExecutiveAnalytics(
   
   // Initialize all days in the range so there are no empty gaps in charts
   const cursor = new Date(startDate);
-  while (cursor.getTime() <= endMs) {
-    // Use the local calendar date instead of UTC ISO conversion. toISOString()
-    // shifts local midnight to the previous date in UTC+ time zones (e.g. Malaysia),
-    // which previously made today's date disappear from the date picker.
-    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+  while (formatLocalDateKey(cursor) <= endDateKey) {
+    const key = formatLocalDateKey(cursor);
     trendMap[key] = { inspected: 0, passed: 0, defects: 0, routes: new Set() };
-    cursor.setDate(cursor.getDate() + 1);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
 
   scopedInspections.forEach(insp => {
-    const key = insp.timestamp.slice(0, 10);
+    const key = getInspectionDateKey(insp);
+    if (!key) return;
     if (!trendMap[key]) {
       trendMap[key] = { inspected: 0, passed: 0, defects: 0, routes: new Set() };
     }
@@ -626,10 +622,10 @@ export function calculateExecutiveAnalytics(
     .sort()
     .map(dateKey => {
       const data = trendMap[dateKey];
-      const d = new Date(`${dateKey}T00:00:00`);
-      const dayName = dayNames[d.getDay()];
-      const dayNum = d.getDate();
-      const monthName = monthNames[d.getMonth()];
+      const d = new Date(`${dateKey}T00:00:00Z`);
+      const dayName = dayNames[d.getUTCDay()];
+      const dayNum = d.getUTCDate();
+      const monthName = monthNames[d.getUTCMonth()];
       const dayCompletedRoutes = data.routes.size;
       const dayComplianceRate = totalRoutesCount > 0
         ? Number(Math.min(100, (dayCompletedRoutes / totalRoutesCount) * 100).toFixed(1))
@@ -744,16 +740,16 @@ export function calculateExecutiveAnalytics(
   const sortedDatesDesc = Object.keys(trendMap).sort((a, b) => b.localeCompare(a));
   
   sortedDatesDesc.forEach(dateKey => {
-    const d = new Date(dateKey + 'T00:00:00');
-    const dayName = dayNames[d.getDay()];
-    const dayNum = d.getDate();
-    const monthName = monthNames[d.getMonth()];
-    const formattedDate = `${dayName}, ${dayNum} ${monthName} ${d.getFullYear()}`;
+    const d = new Date(dateKey + 'T00:00:00Z');
+    const dayName = dayNames[d.getUTCDay()];
+    const dayNum = d.getUTCDate();
+    const monthName = monthNames[d.getUTCMonth()];
+    const formattedDate = `${dayName}, ${dayNum} ${monthName} ${d.getUTCFullYear()}`;
 
     depotRankings.forEach(dr => {
       const dep = dr.depot;
       const dayInspections = scopedInspections.filter(insp => {
-        const iDate = insp.timestamp.slice(0, 10);
+        const iDate = getInspectionDateKey(insp);
         const iDep = (insp.vehicleBranch || 'BL').toUpperCase();
         return iDate === dateKey && iDep === dep;
       });
@@ -889,7 +885,7 @@ export function calculateExecutiveAnalytics(
     .map(i => ({
       id: i.id,
       timestamp: i.timestamp,
-      formattedDate: i.formattedDate,
+      formattedDate: new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(i.timestamp)),
       vehicleNo: i.vehicleNo,
       vehicleBranch: i.vehicleBranch,
       truckCategory: i.truckCategory,
@@ -931,8 +927,8 @@ export function calculateExecutiveAnalytics(
     recentDefectLogs,
     meta: {
       timeframe,
-      startDate: startDate.toISOString().slice(0, 10),
-      endDate: endDate.toISOString().slice(0, 10),
+      startDate: startDateKey,
+      endDate: endDateKey,
       selectedBranch: branchFilter || 'ALL DEPOTS',
       selectedCategory: categoryFilter || 'ALL TRUCKS',
       generatedAt: new Date().toISOString(),

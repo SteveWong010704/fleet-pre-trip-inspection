@@ -20,6 +20,25 @@ import {
   Terminal,
 } from 'lucide-react';
 
+
+const FOMS_TIME_ZONE = 'Asia/Kuala_Lumpur';
+const formatMalaysiaDateTime = (value?: string) => {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('en-GB', {
+    timeZone: FOMS_TIME_ZONE, day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).format(date);
+};
+const malaysiaDateAndTimeParts = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return { date: '', time: '' };
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: FOMS_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(date);
+  const get = (type: string) => parts.find(p => p.type === type)?.value || '';
+  return { date: `${get('year')}-${get('month')}-${get('day')}`, time: `${get('hour')}:${get('minute')}` };
+};
+
+
 interface SystemLogEntry {
   timestamp: string;
   level: 'INFO' | 'WARN' | 'ERROR' | 'HTTP' | 'DEBUG';
@@ -101,19 +120,9 @@ export const AuditLogViewer: React.FC = () => {
         return false;
       }
 
-      // Parse log date and time
-      const logDateObj = new Date(log.timestamp);
-      if (isNaN(logDateObj.getTime())) return true;
-
-      // Extract local YYYY-MM-DD and HH:mm
-      const year = logDateObj.getFullYear();
-      const month = String(logDateObj.getMonth() + 1).padStart(2, '0');
-      const day = String(logDateObj.getDate()).padStart(2, '0');
-      const logDateStr = `${year}-${month}-${day}`;
-
-      const hours = String(logDateObj.getHours()).padStart(2, '0');
-      const minutes = String(logDateObj.getMinutes()).padStart(2, '0');
-      const logTimeStr = `${hours}:${minutes}`;
+      // Security audit filters use Malaysia local time (UTC+08:00), independent of browser timezone.
+      const { date: logDateStr, time: logTimeStr } = malaysiaDateAndTimeParts(log.timestamp);
+      if (!logDateStr || !logTimeStr) return true;
 
       // 3. Date Range Filter
       if (dateFrom && logDateStr < dateFrom) return false;
@@ -159,7 +168,7 @@ export const AuditLogViewer: React.FC = () => {
     if (filteredAuditLogs.length === 0) return;
     const headers = ['Timestamp', 'Event Type', 'Severity', 'Operator', 'IP Address', 'Details'];
     const rows = filteredAuditLogs.map((l) => [
-      `"${new Date(l.timestamp).toLocaleString()}"`,
+      `"${formatMalaysiaDateTime(l.timestamp)}"`,
       `"${l.eventType || ''}"`,
       `"${l.severity || 'info'}"`,
       `"${(l.operator || '').replace(/"/g, '""')}"`,
@@ -171,7 +180,7 @@ export const AuditLogViewer: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `audit_logs_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `audit_logs_${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -484,7 +493,7 @@ export const AuditLogViewer: React.FC = () => {
                     paginatedLogs.map((log) => (
                       <tr key={log.id} className="hover:bg-slate-50/90 transition">
                         <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap font-medium">
-                          {new Date(log.timestamp).toLocaleString()}
+                          {formatMalaysiaDateTime(log.timestamp)}
                         </td>
                         <td className="px-4 py-2.5 whitespace-nowrap">
                           <span
