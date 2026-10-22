@@ -103,13 +103,23 @@ export function getInspectionDateKey(inspection: InspectionRecord | any): string
   // 1. Follow Inspection Audit Date & Time (formattedDate)
   const formatted = String(inspection.formattedDate || inspection.FormattedDate || '').trim();
   if (formatted) {
-    // Check DD/MM/YYYY format (standard Malaysian format in Inspection Audit)
-    const dmyMatch = formatted.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-    if (dmyMatch) {
-      const day = dmyMatch[1].padStart(2, '0');
-      const month = dmyMatch[2].padStart(2, '0');
-      const year = dmyMatch[3];
-      return `${year}-${month}-${day}`;
+    // DB FormattedDate is commonly produced with en-US toLocaleString():
+    // "10/20/2026, 18:02:33" = MM/DD/YYYY, HH:mm:ss.
+    // Support both en-US and Malaysian DD/MM/YYYY safely (never rely on Date.parse).
+    const slashDate = formatted.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (slashDate) {
+      const first = Number(slashDate[1]);
+      const second = Number(slashDate[2]);
+      let month: number;
+      let day: number;
+      if (first > 12 && second <= 12) { day = first; month = second; } // DD/MM/YYYY
+      else if (second > 12 && first <= 12) { month = first; day = second; } // MM/DD/YYYY
+      else { month = first; day = second; } // Ambiguous values default to DB's en-US format
+      const year = Number(slashDate[3]);
+      const check = new Date(Date.UTC(year, month - 1, day));
+      if (month >= 1 && month <= 12 && day >= 1 && check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) {
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
     }
 
     // Check YYYY-MM-DD format
