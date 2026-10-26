@@ -17,11 +17,12 @@ import { BackupRetentionManager } from './components/AdminPortal/BackupRetention
 import { ExecutiveDashboard } from './components/AdminPortal/ExecutiveDashboard';
 import { OperationsManager } from './components/AdminPortal/OperationsManager';
 import { UserManagement } from './components/AdminPortal/UserManagement';
+import { DriverQaPatternReport } from './components/AdminPortal/DriverQaPatternReport';
 import { fetchVehicleByPlate, checkDriverDailyInspection, checkVehicleDailyInspection, clearAuthToken } from './lib/api';
 import { syncPublicBaseUrlFromServer } from './lib/publicUrl';
 import { getCheckpointRequiredPhotoCount } from './lib/checkpointConfig';
 import { getDefaultSystemChecks } from './lib/quickChecklistConfig';
-import { Smartphone, LayoutDashboard, Truck, ClipboardList, Send, FileCheck, ArrowLeft, ArrowRight, ShieldCheck, Users, AlertTriangle, HardDrive, TrendingUp, Route, UserCheck } from 'lucide-react';
+import { Smartphone, LayoutDashboard, Truck, ClipboardList, Send, FileCheck, ArrowLeft, ArrowRight, ShieldCheck, Users, AlertTriangle, HardDrive, TrendingUp, Route, UserCheck, AlertOctagon } from 'lucide-react';
 
 export default function App() {
   // Check if opened from a Driver QR code scan (?plate=XXX or ?view=driver or ?certId=XXX)
@@ -36,7 +37,7 @@ export default function App() {
     return isDriverQrScan() ? 'driver' : 'admin';
   });
 
-  type AdminTab = 'analytics' | 'fleet' | 'drivers' | 'operations' | 'history' | 'bulk' | 'qr' | 'logs' | 'backup' | 'users';
+  type AdminTab = 'analytics' | 'fleet' | 'drivers' | 'operations' | 'history' | 'qa_pattern' | 'bulk' | 'qr' | 'logs' | 'backup' | 'users';
 
   const ALL_ADMIN_TABS: { id: AdminTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: 'analytics', label: 'Executive Analytics', icon: TrendingUp },
@@ -44,6 +45,7 @@ export default function App() {
     { id: 'drivers', label: 'Drivers & Accounts', icon: Users },
     { id: 'operations', label: 'Manage Route, Depo, Region', icon: Route },
     { id: 'history', label: 'Inspection Audit & Export', icon: ClipboardList },
+    { id: 'qa_pattern', label: 'Driver QA & Patterns', icon: AlertOctagon },
     { id: 'bulk', label: 'Bulk Upload & Auto-QR', icon: Send },
     { id: 'qr', label: 'QR Label Generator', icon: FileCheck },
     { id: 'logs', label: 'Security Audit Logs', icon: ShieldCheck },
@@ -500,52 +502,64 @@ export default function App() {
                   </button>
                   )}
 
+                  {permittedTabs.includes('qa_pattern') && (
+                    <button
+                      onClick={() => setAdminTab('qa_pattern')}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                        adminTab === 'qa_pattern' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                    >
+                      <AlertOctagon className="w-4 h-4" />
+                      <span>Driver QA & Patterns</span>
+                    </button>
+                  )}
+
                   {permittedTabs.includes('bulk') && (
-<button
-                    onClick={() => setAdminTab('bulk')}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
-                      adminTab === 'bulk' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                    }`}
-                  >
-                    <Send className="w-4 h-4" />
-                    <span>Bulk Upload & Auto-QR</span>
-                  </button>
+                    <button
+                      onClick={() => setAdminTab('bulk')}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                        adminTab === 'bulk' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Send className="w-4 h-4" />
+                      <span>Bulk Upload & Auto-QR</span>
+                    </button>
                   )}
 
                   {permittedTabs.includes('qr') && (
-<button
-                    onClick={() => setAdminTab('qr')}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
-                      adminTab === 'qr' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                    }`}
-                  >
-                    <FileCheck className="w-4 h-4" />
-                    <span>QR Label Generator</span>
-                  </button>
+                    <button
+                      onClick={() => setAdminTab('qr')}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                        adminTab === 'qr' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                    >
+                      <FileCheck className="w-4 h-4" />
+                      <span>QR Label Generator</span>
+                    </button>
                   )}
 
                   {permittedTabs.includes('logs') && (
-<button
-                    onClick={() => setAdminTab('logs')}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
-                      adminTab === 'logs' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                    }`}
-                  >
-                    <ShieldCheck className="w-4 h-4" />
-                    <span>Security Audit Logs</span>
-                  </button>
+                    <button
+                      onClick={() => setAdminTab('logs')}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                        adminTab === 'logs' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>Security Audit Logs</span>
+                    </button>
                   )}
 
                   {permittedTabs.includes('backup') && (
-<button
-                    onClick={() => setAdminTab('backup')}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
-                      adminTab === 'backup' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                    }`}
-                  >
-                    <HardDrive className="w-4 h-4" />
-                    <span>Daily Backup (C:\ Drive)</span>
-                  </button>
+                    <button
+                      onClick={() => setAdminTab('backup')}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2 cursor-pointer ${
+                        adminTab === 'backup' ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                    >
+                      <HardDrive className="w-4 h-4" />
+                      <span>Daily Backup (C:\ Drive)</span>
+                    </button>
                   )}
                   {permittedTabs.includes('users') && (
                     <button
@@ -565,7 +579,13 @@ export default function App() {
                 {adminTab === 'fleet' && <FleetOverview />}
                 {adminTab === 'drivers' && <DriverManagement />}
                 {adminTab === 'operations' && <OperationsManager />}
-                {adminTab === 'history' && <InspectionHistory />}
+                {adminTab === 'history' && (
+                  <InspectionHistory
+                    onNavigateToQaReport={() => setAdminTab('qa_pattern')}
+                    activeAdmin={activeAdmin}
+                  />
+                )}
+                {adminTab === 'qa_pattern' && <DriverQaPatternReport />}
                 {adminTab === 'bulk' && <BulkManager />}
                 {adminTab === 'qr' && <QrCodeGenerator />}
                 {adminTab === 'logs' && <AuditLogViewer />}

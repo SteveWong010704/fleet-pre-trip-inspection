@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { InspectionRecord, InspectionPhoto } from '../../types';
-import { fetchInspections, clearAllInspections } from '../../lib/api';
+import { fetchInspections, clearAllInspections, updateInspectionPhotoQaApi } from '../../lib/api';
 import {
   ShieldCheck,
   CheckCircle2,
@@ -30,6 +30,8 @@ import {
   ArrowUp,
   ArrowDown,
   Camera,
+  AlertOctagon,
+  ChevronRight,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -69,16 +71,8 @@ const malaysiaDateKey = (recordOrValue?: any) => {
   if (typeof recordOrValue === 'object') {
     const formatted = String(recordOrValue.formattedDate || '').trim();
     if (formatted) {
-      const slashDate = formatted.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-      if (slashDate) {
-        const first = Number(slashDate[1]);
-        const second = Number(slashDate[2]);
-        const month = first > 12 && second <= 12 ? second : first;
-        const day = first > 12 && second <= 12 ? first : second;
-        const year = Number(slashDate[3]);
-        const check = new Date(Date.UTC(year, month - 1, day));
-        if (month >= 1 && month <= 12 && day >= 1 && check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      }
+      const dmy = formatted.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+      if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
       const ymd = formatted.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
       if (ymd) return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
     }
@@ -90,16 +84,8 @@ const malaysiaDateKey = (recordOrValue?: any) => {
   }
 
   const s = String(recordOrValue).trim();
-  const slashDate = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-  if (slashDate) {
-    const first = Number(slashDate[1]);
-    const second = Number(slashDate[2]);
-    const month = first > 12 && second <= 12 ? second : first;
-    const day = first > 12 && second <= 12 ? first : second;
-    const year = Number(slashDate[3]);
-    const check = new Date(Date.UTC(year, month - 1, day));
-    if (month >= 1 && month <= 12 && day >= 1 && check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  }
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
   const localYmd = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (localYmd && !s.includes('Z') && !/[+\-]\d{2}:?\d{2}$/.test(s)) {
     return `${localYmd[1]}-${localYmd[2]}-${localYmd[3]}`;
@@ -136,7 +122,12 @@ const malaysiaTimeKey = (recordOrValue?: any) => {
   return `${get('hour')}:${get('minute')}`;
 };
 
-export const InspectionHistory: React.FC = () => {
+export interface InspectionHistoryProps {
+  onNavigateToQaReport?: () => void;
+  activeAdmin?: any;
+}
+
+export const InspectionHistory: React.FC<InspectionHistoryProps> = ({ onNavigateToQaReport, activeAdmin }) => {
   const [inspections, setInspections] = useState<InspectionRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [showClearConfirmModal, setShowClearConfirmModal] = useState<boolean>(false);
@@ -164,6 +155,169 @@ export const InspectionHistory: React.FC = () => {
   
   const [activeRecord, setActiveRecord] = useState<InspectionRecord | null>(null);
   const [previewPhoto, setPreviewPhoto] = useState<InspectionPhoto | null>(null);
+
+  // Photo QA Audit Form State in Preview Modal
+  const [qaQuality, setQaQuality] = useState<'correct' | 'wrong_part' | 'wrong_position'>('correct');
+  const [qaAccuracy, setQaAccuracy] = useState<'accurate' | 'false_positive' | 'false_negative'>('accurate');
+  const [qaNote, setQaNote] = useState<string>('');
+  const [isSavingQa, setIsSavingQa] = useState<boolean>(false);
+  const [qaSaveSuccess, setQaSaveSuccess] = useState<boolean>(false);
+
+  // Synchronize QA audit state when opening preview modal
+  useEffect(() => {
+    if (previewPhoto) {
+      const existing = previewPhoto.qaAudit || (activeRecord?.qaAudits ? (activeRecord.qaAudits[previewPhoto.url] || activeRecord.qaAudits[previewPhoto.slotName || ''] || activeRecord.qaAudits[previewPhoto.itemId || '']) : undefined);
+      if (existing) {
+        setQaQuality(existing.photoQuality || 'correct');
+        setQaAccuracy(existing.accuracyType || 'accurate');
+        setQaNote(existing.adminNote || '');
+      } else {
+        setQaQuality('correct');
+        setQaAccuracy('accurate');
+        setQaNote('');
+      }
+      setQaSaveSuccess(false);
+    }
+  }, [previewPhoto, activeRecord]);
+
+  const handleSaveQaDecision = async (
+    qualityOverride?: 'correct' | 'wrong_part' | 'wrong_position',
+    accuracyOverride?: 'accurate' | 'false_positive' | 'false_negative',
+    noteOverride?: string
+  ) => {
+    if (!activeRecord || !previewPhoto) return;
+    const quality = qualityOverride !== undefined ? qualityOverride : qaQuality;
+    const accuracy = accuracyOverride !== undefined ? accuracyOverride : qaAccuracy;
+    const note = noteOverride !== undefined ? noteOverride : qaNote;
+
+    try {
+      setIsSavingQa(true);
+      const photoKey = previewPhoto.url || previewPhoto.slotName || previewPhoto.itemId || 'photo';
+      const updatedInsp = await updateInspectionPhotoQaApi(activeRecord.id, {
+        photoUrlOrSlot: photoKey,
+        photoQuality: quality,
+        accuracyType: accuracy,
+        adminNote: note.trim(),
+        auditedBy: activeAdmin?.name || activeAdmin?.username || 'Steve Wong (Admin)',
+      });
+
+      // Update activeRecord
+      setActiveRecord(updatedInsp);
+      // Update inspections list in place
+      setInspections(prev => prev.map(item => item.id === updatedInsp.id ? updatedInsp : item));
+      // Update previewPhoto in place
+      const isClean = quality === 'correct' && accuracy === 'accurate' && !note.trim();
+      const updatedPhoto: InspectionPhoto = {
+        ...previewPhoto,
+        qaAudit: isClean ? undefined : {
+          photoQuality: quality,
+          accuracyType: accuracy,
+          adminNote: note.trim(),
+          auditedBy: activeAdmin?.name || activeAdmin?.username || 'Steve Wong (Admin)',
+          auditedAt: new Date().toISOString(),
+        },
+      };
+      setPreviewPhoto(updatedPhoto);
+      setQaQuality(quality);
+      setQaAccuracy(accuracy);
+      setQaSaveSuccess(true);
+      setTimeout(() => setQaSaveSuccess(false), 3000);
+    } catch (err: any) {
+      alert(`Failed to save QA decision: ${err.message}`);
+    } finally {
+      setIsSavingQa(false);
+    }
+  };
+
+  const handleToggleWrongPart = () => {
+    const nextQuality: 'correct' | 'wrong_part' = qaQuality === 'wrong_part' ? 'correct' : 'wrong_part';
+    setQaQuality(nextQuality);
+    handleSaveQaDecision(nextQuality, qaAccuracy, qaNote);
+  };
+
+  const handleToggleBadAngle = () => {
+    const nextQuality: 'correct' | 'wrong_position' = qaQuality === 'wrong_position' ? 'correct' : 'wrong_position';
+    setQaQuality(nextQuality);
+    handleSaveQaDecision(nextQuality, qaAccuracy, qaNote);
+  };
+
+  const handleToggleFalseAlarm = () => {
+    const nextAccuracy: 'accurate' | 'false_positive' = qaAccuracy === 'false_positive' ? 'accurate' : 'false_positive';
+    setQaAccuracy(nextAccuracy);
+    handleSaveQaDecision(qaQuality, nextAccuracy, qaNote);
+  };
+
+  const handleToggleFalseNegative = () => {
+    const nextAccuracy: 'accurate' | 'false_negative' = qaAccuracy === 'false_negative' ? 'accurate' : 'false_negative';
+    setQaAccuracy(nextAccuracy);
+    handleSaveQaDecision(qaQuality, nextAccuracy, qaNote);
+  };
+
+  const handleResetToAccurate = () => {
+    setQaQuality('correct');
+    setQaAccuracy('accurate');
+    setQaNote('');
+    handleSaveQaDecision('correct', 'accurate', '');
+  };
+
+  const renderPhotoQaBadge = (photo?: InspectionPhoto) => {
+    if (!photo) return null;
+    const qa = photo.qaAudit || (activeRecord?.qaAudits ? (activeRecord.qaAudits[photo.url] || activeRecord.qaAudits[photo.slotName || ''] || activeRecord.qaAudits[photo.itemId || '']) : undefined);
+    
+    const isWrongPart = qa?.photoQuality === 'wrong_part';
+    const isWrongPos = qa?.photoQuality === 'wrong_position';
+    const isFalsePos = qa?.accuracyType === 'false_positive';
+    const isFalseNeg = qa?.accuracyType === 'false_negative';
+    const hasMistake = isWrongPart || isWrongPos || isFalsePos || isFalseNeg;
+
+    if (!qa || !hasMistake) {
+      return (
+        <button
+          onClick={(e) => { e.stopPropagation(); setPreviewPhoto(photo); }}
+          className="w-full text-[10px] font-bold py-1 px-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition flex items-center justify-center gap-1 cursor-pointer"
+        >
+          <ShieldCheck className="w-3 h-3 text-slate-500" />
+          <span>Audit Photo</span>
+        </button>
+      );
+    }
+
+    return (
+      <div
+        onClick={(e) => { e.stopPropagation(); setPreviewPhoto(photo); }}
+        className="space-y-1 cursor-pointer group"
+        title="Click to edit QA audit finding"
+      >
+        <div className="flex flex-wrap gap-1">
+          {isWrongPart && (
+            <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+              ⚠ Wrong Part
+            </span>
+          )}
+          {isWrongPos && (
+            <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 border border-orange-300">
+              📐 Bad Angle
+            </span>
+          )}
+          {isFalsePos && (
+            <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 border border-blue-300">
+              ⚡ False Alarm (Part OK)
+            </span>
+          )}
+          {isFalseNeg && (
+            <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-600 text-white border border-rose-700 animate-pulse">
+              🚨 Missed Defect (False Neg)
+            </span>
+          )}
+        </div>
+        {qa.adminNote && (
+          <div className="text-[9px] text-slate-500 truncate" title={qa.adminNote}>
+            Note: {qa.adminNote}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const handlePhotoImgError = (e: React.SyntheticEvent<HTMLImageElement>, photoUrl?: string, itemCode?: number | string) => {
     const img = e.currentTarget;
@@ -1138,6 +1292,17 @@ export const InspectionHistory: React.FC = () => {
 
           {/* Export Action Buttons */}
           <div className="flex flex-wrap items-center gap-2">
+            {onNavigateToQaReport && (
+              <button
+                onClick={onNavigateToQaReport}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl flex items-center space-x-1.5 shadow-sm transition cursor-pointer shadow-indigo-500/20"
+                title="View Driver QA & Mistake Patterns"
+              >
+                <ShieldCheck className="w-4 h-4 text-indigo-200" />
+                <span>Driver QA & Patterns</span>
+              </button>
+            )}
+
             <button
               onClick={handleExportPDF}
               className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold px-3.5 py-2 rounded-xl flex items-center space-x-1.5 shadow-sm transition cursor-pointer"
@@ -1990,6 +2155,7 @@ export const InspectionHistory: React.FC = () => {
                           <div className="text-[10px] text-slate-500 font-mono truncate">
                             {photo ? '✓ Watermarked' : 'Missing'}
                           </div>
+                          {photo && renderPhotoQaBadge(photo)}
                         </div>
                       );
                     })}
@@ -2086,6 +2252,7 @@ export const InspectionHistory: React.FC = () => {
                           <div className="text-[10px] text-slate-500 font-mono truncate">
                             {photo ? '✓ Watermarked' : 'Missing'}
                           </div>
+                          {photo && renderPhotoQaBadge(photo)}
                         </div>
                       );
                     })}
@@ -2154,6 +2321,7 @@ export const InspectionHistory: React.FC = () => {
                           No Cluster Photo
                         </div>
                       )}
+                      {dashPhoto && <div className="mt-2">{renderPhotoQaBadge(dashPhoto)}</div>}
                     </div>
 
                     {/* Right: Confirmed Indicator Status Ticks */}
@@ -2258,6 +2426,7 @@ export const InspectionHistory: React.FC = () => {
                         </div>
                       </div>
                     )}
+                    {radPhoto && renderPhotoQaBadge(radPhoto)}
 
                     {radItem?.defectNote && (
                       <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded-lg font-medium">
@@ -2306,6 +2475,7 @@ export const InspectionHistory: React.FC = () => {
                         </div>
                       </div>
                     )}
+                    {capPhoto && renderPhotoQaBadge(capPhoto)}
 
                     {capItem?.defectNote && (
                       <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded-lg font-medium">
@@ -2471,6 +2641,7 @@ export const InspectionHistory: React.FC = () => {
                               </div>
                             </div>
                           )}
+                          {photo && renderPhotoQaBadge(photo)}
 
                           {totalChecks > 0 && (
                             <div className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1.5 shadow-2xs">
@@ -2557,19 +2728,29 @@ export const InspectionHistory: React.FC = () => {
         </div>
       )}
 
-      {/* PHOTO LIGHTBOX MODAL (Click to Enlarge Any Photo with Watermark Details) */}
+      {/* PHOTO LIGHTBOX MODAL WITH INTERACTIVE QA AUDIT CONTROLS */}
       {previewPhoto && (
-        <div className="fixed inset-0 z-60 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
-          <div className="max-w-3xl w-full bg-slate-900 rounded-3xl overflow-hidden border border-slate-700 shadow-2xl space-y-3 p-4">
-            <div className="flex items-center justify-between text-white border-b border-slate-800 pb-2.5">
+        <div className="fixed inset-0 z-60 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+          <div className="max-w-4xl w-full bg-slate-900 rounded-3xl overflow-hidden border border-slate-700 shadow-2xl space-y-4 p-4 sm:p-6 max-h-[92vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between text-white border-b border-slate-800 pb-3">
               <div>
-                <h4 className="font-bold text-sm text-slate-100">
-                  {previewPhoto.itemTitle || 'Evidence Photo'}
+                <div className="flex items-center gap-2">
+                  <h4 className="font-bold text-base text-slate-100">
+                    {previewPhoto.itemTitle || 'Inspection Evidence Photo'}
+                  </h4>
                   {previewPhoto.slotName && (
-                    <span className="text-blue-400 font-bold ml-1.5">({previewPhoto.slotName})</span>
+                    <span className="text-blue-400 font-bold text-xs bg-blue-950/60 border border-blue-800/60 px-2 py-0.5 rounded-md">
+                      {previewPhoto.slotName}
+                    </span>
                   )}
-                </h4>
-                <div className="text-[11px] text-slate-400 font-mono">
+                  {activeRecord && (
+                    <span className="font-mono text-xs text-slate-400">
+                      • {activeRecord.vehicleNo} ({activeRecord.driverName})
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] text-slate-400 font-mono mt-0.5">
                   {formatMalaysiaDateTime(previewPhoto.timestamp)}
                 </div>
               </div>
@@ -2581,24 +2762,265 @@ export const InspectionHistory: React.FC = () => {
               </button>
             </div>
 
-            <div className="relative rounded-2xl overflow-hidden bg-black flex items-center justify-center max-h-[70vh]">
-              <img
-                src={previewPhoto.url}
-                alt={previewPhoto.itemTitle || 'Inspection Photo'}
-                className="max-w-full max-h-[70vh] object-contain rounded-xl"
-                onError={(e) => handlePhotoImgError(e, previewPhoto.url)}
-              />
-            </div>
-
-            {previewPhoto.gps && (
-              <div className="text-xs text-blue-300 font-mono flex items-center justify-between bg-slate-800/80 p-2.5 rounded-xl border border-slate-700">
-                <span className="flex items-center gap-1.5">
-                  <MapPin className="w-3.5 h-3.5 text-blue-400" />
-                  <span>GPS: {typeof previewPhoto.gps.lat === 'number' ? previewPhoto.gps.lat.toFixed(5) : previewPhoto.gps.lat}°N, {typeof previewPhoto.gps.lng === 'number' ? previewPhoto.gps.lng.toFixed(5) : previewPhoto.gps.lng}°E</span>
-                </span>
-                <span className="text-[10px] text-slate-400">{previewPhoto.caption || 'Inspection Stamped'}</span>
+            {/* Scrollable Modal Content */}
+            <div className="overflow-y-auto space-y-4 pr-1 flex-1">
+              {/* Photo Display */}
+              <div className="relative rounded-2xl overflow-hidden bg-black flex items-center justify-center max-h-[46vh] border border-slate-800">
+                <img
+                  src={previewPhoto.url}
+                  alt={previewPhoto.itemTitle || 'Inspection Photo'}
+                  className="max-w-full max-h-[46vh] object-contain rounded-xl"
+                  onError={(e) => handlePhotoImgError(e, previewPhoto.url)}
+                />
               </div>
-            )}
+
+              {/* Watermark GPS Bar */}
+              {previewPhoto.gps && (
+                <div className="text-xs text-blue-300 font-mono flex items-center justify-between bg-slate-800/80 p-2.5 rounded-xl border border-slate-700">
+                  <span className="flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-blue-400" />
+                    <span>GPS: {typeof previewPhoto.gps.lat === 'number' ? previewPhoto.gps.lat.toFixed(5) : previewPhoto.gps.lat}°N, {typeof previewPhoto.gps.lng === 'number' ? previewPhoto.gps.lng.toFixed(5) : previewPhoto.gps.lng}°E</span>
+                  </span>
+                  <span className="text-[10px] text-slate-400">{previewPhoto.caption || 'Inspection Stamped'}</span>
+                </div>
+              )}
+
+              {/* QA AUDIT & VERIFICATION CONTROL PANEL */}
+              {activeRecord && (() => {
+                const checkItem = activeRecord.items?.find((i) => i.id === previewPhoto.itemId || (i.code && previewPhoto.itemId && String(i.code) === String(previewPhoto.itemId)));
+                const isFailedOrDefect = Boolean(
+                  previewPhoto.isDefect ||
+                  checkItem?.status === 'Fail' ||
+                  (activeRecord.defects && activeRecord.defects.some((d) => d.itemId === previewPhoto.itemId || d.photoUrl === previewPhoto.url))
+                );
+
+                const isWrongPart = qaQuality === 'wrong_part';
+                const isWrongPos = qaQuality === 'wrong_position';
+                const isFalseAlarm = qaAccuracy === 'false_positive';
+                const isFalseNegative = qaAccuracy === 'false_negative';
+                const hasAnyMistake = isWrongPart || isWrongPos || isFalseAlarm || isFalseNegative;
+
+                return (
+                  <div className="bg-slate-800/95 rounded-2xl p-4 sm:p-5 border border-slate-700 space-y-4 text-slate-100 shadow-xl">
+                    {/* Header */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-700/80 pb-3">
+                      <div className="flex items-center gap-2.5">
+                        <span className="p-1.5 rounded-lg bg-blue-600 text-white shadow-sm">
+                          <ShieldCheck className="w-4 h-4" />
+                        </span>
+                        <div>
+                          <h5 className="font-bold text-sm text-white flex items-center gap-2">
+                            <span>Admin Photo Audit Decision</span>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-md font-black tracking-wide ${isFailedOrDefect ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'bg-emerald-950 text-emerald-300 border border-emerald-800'}`}>
+                              {isFailedOrDefect ? 'Failed / Defect Photo' : 'Passed Photo'}
+                            </span>
+                          </h5>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            Default is Accurate. Click a button below if wrong to flag driver mistake.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Current status pill */}
+                      <div className="flex items-center gap-2">
+                        {!hasAnyMistake ? (
+                          <span className="px-2.5 py-1 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-1.5">
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>✓ Accurate (Default)</span>
+                          </span>
+                        ) : isFalseNegative ? (
+                          <span className="px-2.5 py-1 rounded-xl bg-rose-500/25 border border-rose-500/50 text-rose-300 text-xs font-bold flex items-center gap-1.5 animate-pulse">
+                            <AlertOctagon className="w-3.5 h-3.5 text-rose-400" />
+                            <span>🚨 Missed Defect (False Neg)</span>
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center gap-1.5 animate-pulse">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Mistake Flagged</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Button Controls Section */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold uppercase tracking-wider text-slate-300 block">
+                          {isFailedOrDefect ? 'Flag Driver Defect Mistake:' : 'Flag Driver Inspection Mistake (Passed Photo):'}
+                        </label>
+                        {hasAnyMistake && (
+                          <button
+                            type="button"
+                            onClick={handleResetToAccurate}
+                            className="text-[11px] text-slate-400 hover:text-white underline cursor-pointer"
+                          >
+                            Reset to Accurate (Clear Flags)
+                          </button>
+                        )}
+                      </div>
+
+                      {/* 3 Buttons: Passed Photo vs Failed/Defect Photo */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        {/* Button 1: Wrong Spare Part */}
+                        <button
+                          type="button"
+                          onClick={handleToggleWrongPart}
+                          className={`p-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 border cursor-pointer ${
+                            isWrongPart
+                              ? 'bg-amber-600 text-white border-amber-400 shadow-lg shadow-amber-600/30 ring-2 ring-amber-400'
+                              : 'bg-slate-900/70 text-slate-300 border-slate-700 hover:bg-slate-700/80 hover:border-amber-500/50'
+                          }`}
+                        >
+                          <AlertTriangle className={`w-4 h-4 ${isWrongPart ? 'text-white' : 'text-amber-400'}`} />
+                          <span>Wrong Spare Part</span>
+                          {isWrongPart && <span className="text-[10px] bg-white/20 px-1.5 py-0.2 rounded font-mono">FLAGGED</span>}
+                        </button>
+
+                        {/* Button 2: Bad Angle */}
+                        <button
+                          type="button"
+                          onClick={handleToggleBadAngle}
+                          className={`p-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 border cursor-pointer ${
+                            isWrongPos
+                              ? 'bg-orange-600 text-white border-orange-400 shadow-lg shadow-orange-600/30 ring-2 ring-orange-400'
+                              : 'bg-slate-900/70 text-slate-300 border-slate-700 hover:bg-slate-700/80 hover:border-orange-500/50'
+                          }`}
+                        >
+                          <Camera className={`w-4 h-4 ${isWrongPos ? 'text-white' : 'text-orange-400'}`} />
+                          <span>Bad Angle</span>
+                          {isWrongPos && <span className="text-[10px] bg-white/20 px-1.5 py-0.2 rounded font-mono">FLAGGED</span>}
+                        </button>
+
+                        {/* Button 3 (Conditional on Passed vs Defect): */}
+                        {!isFailedOrDefect ? (
+                          /* For PASSED Photo: False Negative (Missed Defect - Hazard!) */
+                          <button
+                            type="button"
+                            onClick={handleToggleFalseNegative}
+                            className={`p-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 border cursor-pointer ${
+                              isFalseNegative
+                                ? 'bg-rose-600 text-white border-rose-400 shadow-lg shadow-rose-600/30 ring-2 ring-rose-400 animate-pulse'
+                                : 'bg-slate-900/70 text-slate-300 border-slate-700 hover:bg-slate-700/80 hover:border-rose-500/50'
+                            }`}
+                            title="Driver marked pass, but photo clearly shows defect or safety risk!"
+                          >
+                            <AlertOctagon className={`w-4 h-4 ${isFalseNegative ? 'text-white' : 'text-rose-400'}`} />
+                            <span>False Negative (Missed Defect)</span>
+                            {isFalseNegative && <span className="text-[10px] bg-white/20 px-1.5 py-0.2 rounded font-mono">FLAGGED</span>}
+                          </button>
+                        ) : (
+                          /* For DEFECT Photo: False Alarm (Part OK - False Positive) */
+                          <button
+                            type="button"
+                            onClick={handleToggleFalseAlarm}
+                            className={`p-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 border cursor-pointer ${
+                              isFalseAlarm
+                                ? 'bg-blue-600 text-white border-blue-400 shadow-lg shadow-blue-600/30 ring-2 ring-blue-400'
+                                : 'bg-slate-900/70 text-slate-300 border-slate-700 hover:bg-slate-700/80 hover:border-blue-500/50'
+                            }`}
+                            title="Driver reported defect, but spare part actually has NO problem"
+                          >
+                            <AlertOctagon className={`w-4 h-4 ${isFalseAlarm ? 'text-white' : 'text-blue-400'}`} />
+                            <span>False Alarm (Part OK)</span>
+                            {isFalseAlarm && <span className="text-[10px] bg-white/20 px-1.5 py-0.2 rounded font-mono">FLAGGED</span>}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Optional Remarks & Coaching Note */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                          Audit Remarks / Coaching Note (Optional)
+                        </label>
+                        <div className="flex flex-wrap gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setQaNote('Wrong spare part photographed; please capture correct component.')}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 cursor-pointer"
+                          >
+                            + Wrong Part
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setQaNote('Camera angle too far or blurry; please retake closer.')}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 cursor-pointer"
+                          >
+                            + Bad Angle
+                          </button>
+                          {!isFailedOrDefect ? (
+                            <button
+                              type="button"
+                              onClick={() => setQaNote('CRITICAL SAFETY RISK: Defect visible in photo, driver failed to report defect (False Negative).')}
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-800 cursor-pointer"
+                            >
+                              + Missed Defect (False Neg)
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setQaNote('Spare part in good condition, false alarm confirmed (False Positive).')}
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-blue-950/80 hover:bg-blue-900 text-blue-200 border border-blue-800 cursor-pointer"
+                            >
+                              + Part OK (False Alarm)
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={qaNote}
+                          onChange={(e) => setQaNote(e.target.value)}
+                          placeholder="Optional remarks explaining driver mistake or coaching guidance..."
+                          className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleSaveQaDecision()}
+                          disabled={isSavingQa}
+                          className="px-4 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white transition cursor-pointer disabled:opacity-50 shrink-0 flex items-center gap-1.5"
+                        >
+                          {isSavingQa ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                          <span>Save Finding</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Footer Feedback & Quick Navigation to QA Report */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-slate-700/80">
+                      <div>
+                        {qaSaveSuccess ? (
+                          <span className="text-xs text-emerald-400 font-bold flex items-center gap-1.5 animate-bounce">
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>QA Finding Saved! Synced to Driver QA Pattern Report.</span>
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-slate-400">
+                            Buttons auto-save findings immediately to inspection record and driver QA pattern analytics.
+                          </span>
+                        )}
+                      </div>
+
+                      {onNavigateToQaReport && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPreviewPhoto(null);
+                            onNavigateToQaReport();
+                          }}
+                          className="text-xs font-bold text-blue-400 hover:text-blue-300 flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>Go to Driver QA Pattern Report</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </div>
       )}
