@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Driver } from '../../types';
-import { fetchDrivers, createDriver, updateDriver, deleteDriver } from '../../lib/api';
+import { fetchDrivers, fetchDepots, createDriver, updateDriver, deleteDriver } from '../../lib/api';
 import {
   Users,
   Search,
@@ -26,6 +26,7 @@ import {
 
 export const DriverManagement: React.FC = () => {
   const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [depotOptions, setDepotOptions] = useState<Array<{ code: string; name?: string; active?: boolean }>>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [search, setSearch] = useState<string>('');
   const [selectedDepot, setSelectedDepot] = useState<string>('ALL');
@@ -83,6 +84,31 @@ export const DriverManagement: React.FC = () => {
     loadDrivers();
   }, [selectedDepot, selectedStatus]);
 
+  // Keep depot filter and assignment choices aligned with Manage Route, Depot, Region.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      fetchDepots().catch(() => []),
+      fetchDrivers().catch(() => []),
+    ]).then(([masterDepots, allDrivers]) => {
+      if (cancelled) return;
+      const byCode = new Map<string, { code: string; name?: string; active?: boolean }>();
+      (masterDepots || []).forEach(depot => {
+        const code = String(depot.code || depot.id || '').trim().toUpperCase();
+        if (code) byCode.set(code, { code, name: depot.name || code, active: depot.active });
+      });
+      // Fall back to existing driver assignments only when no depot master data is available.
+      if (byCode.size === 0) {
+        (allDrivers || []).forEach(driver => {
+          const code = String(driver.depot || '').trim().toUpperCase();
+          if (code && !byCode.has(code)) byCode.set(code, { code, name: code });
+        });
+      }
+      setDepotOptions(Array.from(byCode.values()).sort((a, b) => a.code.localeCompare(b.code)));
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     loadDrivers();
@@ -91,14 +117,15 @@ export const DriverManagement: React.FC = () => {
   const handleOpenCreate = () => {
     setModalMode('create');
     const randomId = String(Math.floor(7000 + Math.random() * 1000));
+    const defaultDepot = depotOptions[0];
     setCurrentDriver({
       name: '',
       employeeId: `SF${randomId}`,
       loginId: randomId,
       password: `${randomId}01`,
       designation: 'SALESMAN',
-      depot: 'BL',
-      depotName: 'BALAKONG',
+      depot: defaultDepot?.code || 'BL',
+      depotName: defaultDepot?.name || defaultDepot?.code || 'BL',
       phone: '+60 12-',
       licenseType: 'GDL Heavy / Class E',
       status: 'A',
@@ -169,8 +196,7 @@ export const DriverManagement: React.FC = () => {
     }
   };
 
-  // Depots unique
-  const depots = ['ALL', 'BL', 'KL', 'KJ', 'GB', 'NL', 'PG', 'IP', 'JB', 'KT', 'MK'];
+  const depots = ['ALL', ...depotOptions.map(depot => depot.code)];
 
   const activeCount = drivers.filter(d => d.status === 'A').length;
   const inactiveCount = drivers.filter(d => d.status === 'I').length;
@@ -569,13 +595,31 @@ export const DriverManagement: React.FC = () => {
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
                     Depot Branch
                   </label>
-                  <input
-                    type="text"
-                    value={currentDriver.depot || 'BL'}
-                    onChange={(e) => setCurrentDriver({ ...currentDriver, depot: e.target.value.toUpperCase() })}
-                    placeholder="e.g. BL, KL, KJ, GB"
+                  <select
+                    value={currentDriver.depot || depotOptions[0]?.code || 'BL'}
+                    onChange={(e) => {
+                      const code = e.target.value.toUpperCase();
+                      const selected = depotOptions.find(depot => depot.code === code);
+                      setCurrentDriver({
+                        ...currentDriver,
+                        depot: code,
+                        depotName: selected?.name || code,
+                      });
+                    }}
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  >
+                    {depotOptions.length === 0 && <option value="BL">BL</option>}
+                    {currentDriver.depot && !depotOptions.some(depot => depot.code === String(currentDriver.depot).toUpperCase()) && (
+                      <option value={String(currentDriver.depot).toUpperCase()}>
+                        {String(currentDriver.depot).toUpperCase()} (Not in Depot Master)
+                      </option>
+                    )}
+                    {depotOptions.map(depot => (
+                      <option key={depot.code} value={depot.code}>
+                        {depot.code}{depot.name && depot.name.toUpperCase() !== depot.code ? ` — ${depot.name}` : ''}{depot.active === false ? ' (Inactive)' : ''}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Contact Phone */}

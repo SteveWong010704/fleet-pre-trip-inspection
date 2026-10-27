@@ -100,11 +100,15 @@ export const ExecutiveDashboard: React.FC = () => {
   }, []);
 
   const availableDepots = useMemo(() => {
-    const set = new Set<string>(masterDepots);
-    if (data?.depotRankings) {
-      data.depotRankings.forEach(r => set.add(r.depot));
+    // Depot management is authoritative; use analytics only if master data is unavailable.
+    const set = new Set<string>(masterDepots.map(code => code.trim().toUpperCase()).filter(Boolean));
+    if (set.size === 0 && data?.depotRankings) {
+      data.depotRankings.forEach(r => {
+        const code = String(r.depot || '').trim().toUpperCase();
+        if (code) set.add(code);
+      });
     }
-    return Array.from(set).filter(Boolean).sort();
+    return Array.from(set).sort();
   }, [masterDepots, data]);
 
   useEffect(() => {

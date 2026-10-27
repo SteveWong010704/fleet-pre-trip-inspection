@@ -1,4 +1,4 @@
-import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, ExecutiveAnalyticsData, RegionItem, DepotItem, RouteItem, RbacRole, RbacUser, RbacFeature } from '../types';
+import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, ExecutiveAnalyticsData, RegionItem, DepotItem, RouteItem, RbacRole, RbacUser, RbacFeature, PhotoQaAudit, DriverQaReportResult, UninspectedDriversReportResult, UninspectedDriverItem } from '../types';
 
 const AUTH_TOKEN_KEY = 'FLEET_SESSION_JWT';
 
@@ -757,5 +757,82 @@ export async function deleteRbacUserApi(username: string): Promise<boolean> {
   if (!d.success) throw new Error(d.error || 'Failed to delete user');
   return d.success;
 }
+
+// ----------------- PHOTO QA & DRIVER PATTERN API -----------------
+
+export async function updateInspectionPhotoQaApi(
+  inspectionId: string,
+  payload: {
+    photoUrlOrSlot: string;
+    photoQuality: 'correct' | 'wrong_part' | 'wrong_position';
+    accuracyType: 'accurate' | 'false_positive' | 'false_negative';
+    adminNote?: string;
+    auditedBy?: string;
+  }
+): Promise<InspectionRecord> {
+  const res = await authFetch(`/api/inspections/${encodeURIComponent(inspectionId)}/photo-qa`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to save photo QA decision');
+  return d.inspection;
+}
+
+export async function fetchDriverQaPatternReportApi(filters?: {
+  dateFrom?: string;
+  dateTo?: string;
+  depot?: string;
+  driverId?: string;
+}): Promise<DriverQaReportResult> {
+  const params = new URLSearchParams();
+  if (filters?.dateFrom) params.append('dateFrom', filters.dateFrom);
+  if (filters?.dateTo) params.append('dateTo', filters.dateTo);
+  if (filters?.depot && filters.depot !== 'ALL') params.append('depot', filters.depot);
+  if (filters?.driverId && filters.driverId !== 'ALL') params.append('driverId', filters.driverId);
+
+  const res = await authFetch(`/api/admin/driver-qa-patterns?${params.toString()}`);
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to fetch driver QA pattern report');
+  return d.report;
+}
+
+export async function fetchUninspectedDriversReportApi(filters?: {
+  date?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  depot?: string;
+  search?: string;
+  designation?: string;
+  sortBy?: 'missedCount' | 'name' | 'depot' | 'employeeId';
+  sortOrder?: 'asc' | 'desc';
+}): Promise<UninspectedDriversReportResult> {
+  const params = new URLSearchParams();
+  if (filters?.date) params.append('date', filters.date);
+  if (filters?.dateFrom) params.append('dateFrom', filters.dateFrom);
+  if (filters?.dateTo) params.append('dateTo', filters.dateTo);
+  if (filters?.depot && filters.depot !== 'ALL') params.append('depot', filters.depot);
+  if (filters?.search) params.append('search', filters.search);
+  if (filters?.designation && filters.designation !== 'ALL') params.append('designation', filters.designation);
+  if (filters?.sortBy) params.append('sortBy', filters.sortBy);
+  if (filters?.sortOrder) params.append('sortOrder', filters.sortOrder);
+
+  const res = await authFetch(`/api/admin/uninspected-drivers?${params.toString()}`);
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to fetch uninspected drivers report');
+  return d;
+}
+
+export async function seedSampleDriverQaAuditsApi(): Promise<{ seededInspections: number; auditedPhotosCount: number }> {
+  const res = await authFetch('/api/admin/driver-qa-seed', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const d = await res.json();
+  if (!d.success) throw new Error(d.error || 'Failed to seed sample driver QA audits');
+  return d;
+}
+
 
 

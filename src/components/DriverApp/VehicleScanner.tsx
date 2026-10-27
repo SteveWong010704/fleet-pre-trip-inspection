@@ -1,6 +1,6 @@
   import React, { useState, useEffect, useRef } from 'react';
   import { Vehicle, Driver, InspectionRecord, isSupervisor } from '../../types';
-  import { fetchVehicles, fetchVehicleByPlate, checkVehicleDailyInspection } from '../../lib/api';
+  import { fetchVehicles, fetchDepots, fetchVehicleByPlate, checkVehicleDailyInspection } from '../../lib/api';
   import { QrCode, Camera, Search, Truck, CheckCircle2, AlertTriangle, ArrowRight, RefreshCw, X, Shield, Fuel, ShieldAlert, ShieldCheck } from 'lucide-react';
   import jsQR from 'jsqr';
 
@@ -18,6 +18,7 @@
     onViewCertificate,
   }) => {
     const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+    const [masterDepotCodes, setMasterDepotCodes] = useState<string[]>([]);
     const [loading, setLoading] = useState<boolean>(true);
     const [search, setSearch] = useState<string>('');
     const [depotFilter, setDepotFilter] = useState<string>(activeDriver.depot || 'ALL');
@@ -34,6 +35,14 @@
 
     useEffect(() => {
       loadVehicles();
+      fetchDepots()
+        .then(depots => {
+          const codes = (depots || [])
+            .map(depot => String(depot.code || depot.id || '').trim().toUpperCase())
+            .filter(Boolean);
+          setMasterDepotCodes(Array.from(new Set(codes)).sort());
+        })
+        .catch(err => console.warn('Could not load master depots for vehicle filter:', err));
       return () => {
         stopCamera();
       };
@@ -170,8 +179,10 @@
       }
     };
 
-    // Filter vehicles
-    const depots = Array.from(new Set(vehicles.map(v => v.branch))).filter(Boolean).sort();
+    // Keep depot choices aligned with Depot management, plus any legacy vehicle branches.
+    const depots = masterDepotCodes.length > 0
+      ? masterDepotCodes
+      : Array.from(new Set(vehicles.map(v => String(v.branch || '').trim().toUpperCase()).filter(Boolean))).sort();
     const filteredVehicles = vehicles.filter(v => {
       const matchDepot = depotFilter === 'ALL' || v.branch.toUpperCase() === depotFilter.toUpperCase();
       const matchSearch = !search || (

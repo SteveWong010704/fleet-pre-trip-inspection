@@ -1,7 +1,23 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, VehicleStatus } from '../src/types';
+import {
+  Vehicle,
+  Driver,
+  InspectionRecord,
+  AuditLog,
+  FleetStats,
+  VehicleStatus,
+  PhotoQuality,
+  AssessmentAccuracy,
+  PhotoQaAudit,
+  DriverQaReportResult,
+  DriverQaPatternSummary,
+  DepotQaPatternGroup,
+  DriverMistakeItem,
+  InspectionPhoto,
+  DriverAuditedInspectionRef,
+} from '../src/types';
 import { INITIAL_VEHICLES, INITIAL_DRIVERS } from './seedData';
 import { scheduleDebouncedBackup } from './backupService';
 import { logger } from './logger';
@@ -171,15 +187,16 @@ export function initStore() {
         console.log(`[Storage] Configured Public QR Base URL: ${memoryStore.settings.publicBaseUrl}`);
       }
 
-      const isDemoPurged = Boolean((memoryStore.settings as any)?.demoPurged);
-      if (!isDemoPurged && memoryStore.vehicles.length === 0 && memoryStore.drivers.length === 0) {
+      if (memoryStore.vehicles.length === 0 && memoryStore.drivers.length === 0) {
         memoryStore.vehicles = [...INITIAL_VEHICLES];
         memoryStore.drivers = [...INITIAL_DRIVERS];
         memoryStore.vehicles.forEach((v) => {
           if (!v.qrToken) v.qrToken = generateVehicleQrToken();
         });
-        saveStore(true);
-        console.log(`[Storage] Re-seeded with ${memoryStore.vehicles.length} vehicles and ${memoryStore.drivers.length} drivers.`);
+        seedHistoricalInspections(20);
+        seedSampleDriverQaAudits();
+        saveStoreSync();
+        console.log(`[Storage] Re-seeded with ${memoryStore.vehicles.length} vehicles, ${memoryStore.drivers.length} drivers, and sample audits.`);
       }
 
       // Ensure all vehicles (including legacy/existing) have a unified static QR security token
@@ -197,15 +214,27 @@ export function initStore() {
 
       // Automatically prune any inspection records older than 45 days on startup
       pruneOldInspections(45);
+
+      // Seed initial sample inspections and QA audits if store is empty
+      if (memoryStore.inspections.length === 0) {
+        seedHistoricalInspections(20);
+        seedSampleDriverQaAudits();
+        console.log(`[Storage] Auto-seeded initial inspections with driver QA audits.`);
+      }
     } else {
-      // Clean start
-      memoryStore.vehicles = [];
-      memoryStore.drivers = [];
+      // Clean start with starter vehicles, drivers, and pre-trip inspection audits
+      memoryStore.vehicles = [...INITIAL_VEHICLES];
+      memoryStore.drivers = [...INITIAL_DRIVERS];
+      memoryStore.vehicles.forEach((v) => {
+        if (!v.qrToken) v.qrToken = generateVehicleQrToken();
+      });
       memoryStore.inspections = [];
       memoryStore.auditLogs = [];
       memoryStore.settings = { publicBaseUrl: envPublicUrl };
-      saveStore(true);
-      console.log(`[Storage] Initialized clean empty store ready for real database.`);
+      seedHistoricalInspections(20);
+      seedSampleDriverQaAudits();
+      saveStoreSync();
+      console.log(`[Storage] Initialized store with starter vehicles, drivers, and inspection audits.`);
     }
 
     // Initialize Master Operations Hierarchy (Regions, Depots, Routes)
@@ -260,10 +289,65 @@ export function initStore() {
             }
 
             if (dbI.length > 0) {
-              memoryStore.inspections = dbI;
+              // Intelligent Merge: Retain QA audits, photo mistake audits, and non-overwritten fields
+              const localMap = new Map<string, InspectionRecord>();
+              for (const loc of memoryStore.inspections) {
+                if (loc && loc.id) localMap.set(loc.id, loc);
+              }
+
+              const mergedList: InspectionRecord[] = [];
+              const seenIds = new Set<string>();
+
+              for (const dbRec of dbI) {
+                seenIds.add(dbRec.id);
+                const localRec = localMap.get(dbRec.id);
+                if (localRec) {
+                  // If local record has QA audit decisions, preserve them!
+                  const hasLocalQa = localRec.qaAudits && Object.keys(localRec.qaAudits).length > 0;
+                  const hasDbQa = dbRec.qaAudits && Object.keys(dbRec.qaAudits).length > 0;
+
+                  const mergedQaAudits = hasDbQa ? { ...localRec.qaAudits, ...dbRec.qaAudits } : (localRec.qaAudits || dbRec.qaAudits);
+                  const mergedQaAuditedAt = dbRec.qaAuditedAt || localRec.qaAuditedAt;
+                  const mergedQaAuditedBy = dbRec.qaAuditedBy || localRec.qaAuditedBy;
+
+                  // Merge photos: keep local photos if DB photos array is empty
+                  let mergedPhotos = (dbRec.photos && dbRec.photos.length > 0) ? dbRec.photos : (localRec.photos || []);
+                  if (localRec.photos && localRec.photos.length > 0 && mergedPhotos.length > 0) {
+                    mergedPhotos = mergedPhotos.map(p => {
+                      const lp = localRec.photos.find(x => x.url === p.url || x.slotName === p.slotName || x.itemId === p.itemId);
+                      return {
+                        ...p,
+                        qaAudit: p.qaAudit || lp?.qaAudit,
+                      };
+                    });
+                  }
+
+                  mergedList.push({
+                    ...dbRec,
+                    qaAudits: mergedQaAudits,
+                    qaAuditedAt: mergedQaAuditedAt,
+                    qaAuditedBy: mergedQaAuditedBy,
+                    photos: mergedPhotos,
+                    items: (dbRec.items && dbRec.items.length > 0) ? dbRec.items : (localRec.items || []),
+                  });
+                } else {
+                  mergedList.push(dbRec);
+                }
+              }
+
+              // Preserve any locally created inspections not yet in DB
+              for (const [id, localRec] of localMap.entries()) {
+                if (!seenIds.has(id)) {
+                  mergedList.push(localRec);
+                }
+              }
+
+              memoryStore.inspections = mergedList;
             } else {
-              console.log(`[MSSQL Production Safe Sync] SQL Server Inspections table is empty. Discarded local mock inspections.`);
-              memoryStore.inspections = [];
+              // If SQL Server Inspections table is empty, do NOT discard local inspections with audits!
+              if (memoryStore.inspections.length > 0) {
+                console.log(`[MSSQL Safe Sync] SQL Server Inspections table has 0 rows. Preserving ${memoryStore.inspections.length} local inspection records with QA audits.`);
+              }
             }
 
             if (dbA.length > 0) {
@@ -772,7 +856,6 @@ export async function bulkImportDrivers(driversList: Partial<Driver>[]): Promise
         phone: item.phone || '+60 12-000 0000',
         dateCreated: item.dateCreated || new Date().toLocaleDateString(),
         status: (item.status as 'A' | 'I') || 'A',
-        avatarUrl: item.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&auto=format&fit=crop&q=80',
         failedAttempts: 0,
         lockedUntil: null,
       };
@@ -939,7 +1022,6 @@ export function createDriver(driverData: Partial<Driver>): Driver {
     phone: driverData.phone || '+60 12-000 0000',
     dateCreated: driverData.dateCreated || new Date().toLocaleDateString(),
     status: (driverData.status as 'A' | 'I') || 'A',
-    avatarUrl: driverData.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&auto=format&fit=crop&q=80',
     failedAttempts: 0,
     lockedUntil: null,
   };
@@ -1030,16 +1112,8 @@ export function getCalendarDateString(val: Date | string | InspectionRecord | an
   if (typeof val === 'object' && !(val instanceof Date)) {
     const formatted = String(val.formattedDate || val.FormattedDate || '').trim();
     if (formatted) {
-      const slashDate = formatted.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-      if (slashDate) {
-        const first = Number(slashDate[1]);
-        const second = Number(slashDate[2]);
-        const month = first > 12 && second <= 12 ? second : first;
-        const day = first > 12 && second <= 12 ? first : second;
-        const year = Number(slashDate[3]);
-        const check = new Date(Date.UTC(year, month - 1, day));
-        if (month >= 1 && month <= 12 && day >= 1 && check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      }
+      const dmy = formatted.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+      if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
       const ymd = formatted.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
       if (ymd) return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
     }
@@ -1055,16 +1129,8 @@ export function getCalendarDateString(val: Date | string | InspectionRecord | an
     const s = val.trim();
     if (!s) return '';
     // Check DD/MM/YYYY format
-    const slashDate = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-    if (slashDate) {
-      const first = Number(slashDate[1]);
-      const second = Number(slashDate[2]);
-      const month = first > 12 && second <= 12 ? second : first;
-      const day = first > 12 && second <= 12 ? first : second;
-      const year = Number(slashDate[3]);
-      const check = new Date(Date.UTC(year, month - 1, day));
-      if (month >= 1 && month <= 12 && day >= 1 && check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    }
+    const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
     // Check YYYY-MM-DD local format without Z or timezone offset
     const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (ymd && !s.includes('Z') && !/[+\-]\d{2}:?\d{2}$/.test(s)) {
@@ -1498,6 +1564,849 @@ export function getInspections(filters?: {
   }
 
   return list;
+}
+
+// ----------------- PHOTO QA & DRIVER PATTERN AUDIT FUNCTIONS -----------------
+
+export function updateInspectionPhotoQa(
+  inspectionId: string,
+  photoUrlOrSlot: string,
+  qaAudit: PhotoQaAudit
+): InspectionRecord | null {
+  const index = memoryStore.inspections.findIndex(r => r.id === inspectionId);
+  if (index === -1) return null;
+
+  const record = memoryStore.inspections[index];
+  if (!record.photos) record.photos = [];
+
+  const isResetClean = qaAudit.photoQuality === 'correct' && qaAudit.accuracyType === 'accurate' && !qaAudit.adminNote?.trim();
+
+  let matched = false;
+  for (const photo of record.photos) {
+    if (
+      photo.url === photoUrlOrSlot ||
+      photo.slotName === photoUrlOrSlot ||
+      photo.itemId === photoUrlOrSlot ||
+      (photo.url && photoUrlOrSlot && photo.url.includes(photoUrlOrSlot))
+    ) {
+      if (isResetClean) {
+        photo.qaAudit = undefined;
+      } else {
+        photo.qaAudit = {
+          photoQuality: qaAudit.photoQuality,
+          accuracyType: qaAudit.accuracyType,
+          adminNote: qaAudit.adminNote?.trim() || '',
+          auditedBy: qaAudit.auditedBy || 'Admin',
+          auditedAt: qaAudit.auditedAt || new Date().toISOString(),
+        };
+      }
+      matched = true;
+      break;
+    }
+  }
+
+  // If not matched directly on existing photo object and a mistake was flagged, push it
+  if (!matched && !isResetClean) {
+    record.photos.push({
+      url: photoUrlOrSlot.startsWith('http') || photoUrlOrSlot.startsWith('/') || photoUrlOrSlot.startsWith('data:') ? photoUrlOrSlot : '/sample-photos/front_left_tyre.jpg',
+      slotName: photoUrlOrSlot,
+      itemId: photoUrlOrSlot,
+      itemTitle: photoUrlOrSlot,
+      timestamp: record.timestamp,
+      qaAudit: {
+        photoQuality: qaAudit.photoQuality,
+        accuracyType: qaAudit.accuracyType,
+        adminNote: qaAudit.adminNote?.trim() || '',
+        auditedBy: qaAudit.auditedBy || 'Admin',
+        auditedAt: qaAudit.auditedAt || new Date().toISOString(),
+      },
+    });
+  }
+
+  if (!record.qaAudits) record.qaAudits = {};
+  if (isResetClean) {
+    delete record.qaAudits[photoUrlOrSlot];
+  } else {
+    record.qaAudits[photoUrlOrSlot] = {
+      photoQuality: qaAudit.photoQuality,
+      accuracyType: qaAudit.accuracyType,
+      adminNote: qaAudit.adminNote?.trim() || '',
+      auditedBy: qaAudit.auditedBy || 'Admin',
+      auditedAt: qaAudit.auditedAt || new Date().toISOString(),
+    };
+  }
+  record.qaAuditedAt = new Date().toISOString();
+  record.qaAuditedBy = qaAudit.auditedBy || 'Admin';
+
+  saveStoreSync();
+  scheduleDebouncedBackup();
+  dbSaveInspection(record).catch(e => console.error('[MSSQL Error] Saving QA audit to SQL Server:', e));
+
+  addAuditLog({
+    eventType: 'PHOTO_QA_AUDIT',
+    operator: qaAudit.auditedBy || 'Admin',
+    ip: '127.0.0.1',
+    details: `QA Audit for ${record.vehicleNo} (${inspectionId}): PhotoQuality=${qaAudit.photoQuality}, Accuracy=${qaAudit.accuracyType}. Note: ${qaAudit.adminNote || 'None'}`,
+    severity: qaAudit.accuracyType === 'false_negative' ? 'danger' : qaAudit.photoQuality !== 'correct' ? 'warning' : 'info',
+  });
+
+  return record;
+}
+
+export function getDriverQaPatternReport(filters?: {
+  dateFrom?: string;
+  dateTo?: string;
+  depot?: string;
+  driverId?: string;
+}): DriverQaReportResult {
+  const inspections = getInspections({
+    dateFrom: filters?.dateFrom?.trim() || undefined,
+    dateTo: filters?.dateTo?.trim() || undefined,
+    branch: filters?.depot,
+    driverId: filters?.driverId,
+  });
+
+  // Group by depot then driver
+  const depotMap = new Map<string, Map<string, { driver: Driver | null; inspections: InspectionRecord[] }>>();
+
+  for (const insp of inspections) {
+    const drvId = (insp.driverId || 'UNKNOWN').trim().toUpperCase();
+    const drvObj = memoryStore.drivers.find(d => 
+      (d.employeeId && d.employeeId.trim().toUpperCase() === drvId) ||
+      (d.loginId && d.loginId.trim().toUpperCase() === drvId) ||
+      (d.name && d.name.trim().toLowerCase() === (insp.driverName || '').trim().toLowerCase())
+    ) || null;
+
+    const depotCode = (drvObj?.depot || insp.driverDepot || insp.vehicleBranch || 'BL').trim().toUpperCase();
+    if (!depotMap.has(depotCode)) {
+      depotMap.set(depotCode, new Map());
+    }
+    const driverMap = depotMap.get(depotCode)!;
+    if (!driverMap.has(drvId)) {
+      driverMap.set(drvId, { driver: drvObj, inspections: [] });
+    }
+    driverMap.get(drvId)!.inspections.push(insp);
+  }
+
+  const depotGroups: DepotQaPatternGroup[] = [];
+  let totalAuditedPhotos = 0;
+  let correctPhotosCount = 0;
+  let wrongPartCount = 0;
+  let wrongPositionCount = 0;
+  let falsePositivesCount = 0;
+  let falseNegativesCount = 0;
+  let totalDriversAudited = 0;
+
+  for (const [depotCode, driverMap] of depotMap.entries()) {
+    const driverSummaries: DriverQaPatternSummary[] = [];
+    let depotAuditedPhotos = 0;
+    let depotWrongPart = 0;
+    let depotWrongPos = 0;
+    let depotFalsePos = 0;
+    let depotFalseNeg = 0;
+
+    for (const [drvId, entry] of driverMap.entries()) {
+      const drvInspections = entry.inspections;
+      const drvName = entry.driver?.name || drvInspections[0]?.driverName || drvId;
+      const mistakes: DriverMistakeItem[] = [];
+      const drvRecentInspections: DriverAuditedInspectionRef[] = [];
+
+      let drvTotalAudited = 0;
+      let drvCorrectPhotos = 0;
+      let drvWrongPart = 0;
+      let drvWrongPos = 0;
+      let drvAccurate = 0;
+      let drvFalsePos = 0;
+      let drvFalseNeg = 0;
+
+      for (const insp of drvInspections) {
+        // Collect audited items from both insp.photos AND insp.qaAudits
+        const photoList: Array<{ photo: InspectionPhoto; qa: PhotoQaAudit }> = [];
+
+        if (insp.photos && Array.isArray(insp.photos)) {
+          for (const photo of insp.photos) {
+            const qa = photo.qaAudit || (insp.qaAudits ? (
+              insp.qaAudits[photo.url] ||
+              (photo.slotName && insp.qaAudits[photo.slotName]) ||
+              (photo.itemId && insp.qaAudits[photo.itemId]) ||
+              Object.entries(insp.qaAudits).find(([k]) => photo.url && (photo.url.includes(k) || k.includes(photo.url)))?.[1]
+            ) : undefined);
+            if (qa) {
+              photoList.push({ photo, qa });
+            }
+          }
+        }
+
+        if (insp.qaAudits) {
+          for (const [key, qa] of Object.entries(insp.qaAudits)) {
+            const already = photoList.some(item => item.photo.url === key || item.photo.slotName === key || item.photo.itemId === key);
+            if (!already && qa) {
+              const matchedItem = insp.items?.find(i => i.id === key);
+              photoList.push({
+                photo: {
+                  url: key.startsWith('http') || key.startsWith('/') ? key : '/sample-photos/front_left_tyre.jpg',
+                  slotName: key,
+                  itemId: key,
+                  itemTitle: matchedItem?.title || key,
+                  timestamp: insp.timestamp,
+                },
+                qa,
+              });
+            }
+          }
+        }
+
+        let inspMistakesCount = 0;
+        for (const { photo, qa } of photoList) {
+          drvTotalAudited++;
+
+          if (qa.photoQuality === 'wrong_part') {
+            drvWrongPart++;
+          } else if (qa.photoQuality === 'wrong_position') {
+            drvWrongPos++;
+          } else {
+            drvCorrectPhotos++;
+          }
+
+          if (qa.accuracyType === 'false_positive') {
+            drvFalsePos++;
+          } else if (qa.accuracyType === 'false_negative') {
+            drvFalseNeg++;
+          } else {
+            drvAccurate++;
+          }
+
+          // Mistake detected
+          if (qa.photoQuality === 'wrong_part' || qa.photoQuality === 'wrong_position' || qa.accuracyType === 'false_positive' || qa.accuracyType === 'false_negative') {
+            inspMistakesCount++;
+            const checkItem = insp.items?.find(i => i.id === photo.itemId);
+            mistakes.push({
+              id: `${insp.id}-${photo.slotName || photo.itemId || Math.random().toString(36).slice(2, 6)}`,
+              inspectionId: insp.id,
+              formattedDate: insp.formattedDate || insp.timestamp,
+              timestamp: insp.timestamp,
+              vehicleNo: insp.vehicleNo,
+              vehicleBranch: insp.vehicleBranch || depotCode,
+              driverId: drvId,
+              driverName: drvName,
+              driverDepot: depotCode,
+              itemId: photo.itemId || 'general',
+              itemTitle: photo.itemTitle || photo.slotName || 'Vehicle Component',
+              photoUrl: photo.url,
+              driverClaimStatus: (checkItem?.status === 'Fail' || photo.isDefect) ? 'Fail' : 'Pass',
+              photoQuality: qa.photoQuality,
+              accuracyType: qa.accuracyType,
+              adminNote: qa.adminNote,
+              auditedBy: qa.auditedBy,
+              auditedAt: qa.auditedAt,
+            });
+          }
+        }
+
+        if (photoList.length > 0 || insp.overallResult === 'Fail') {
+          drvRecentInspections.push({
+            id: insp.id,
+            formattedDate: insp.formattedDate || insp.timestamp,
+            timestamp: insp.timestamp,
+            vehicleNo: insp.vehicleNo,
+            vehicleBranch: insp.vehicleBranch || depotCode,
+            overallResult: insp.overallResult,
+            auditedPhotosCount: photoList.length,
+            mistakesCount: inspMistakesCount,
+          });
+        }
+      }
+
+      if (drvTotalAudited > 0) {
+        totalDriversAudited++;
+      }
+
+      // Pattern identification heuristics
+      const identifiedPatterns: string[] = [];
+      if (drvWrongPart >= 2) {
+        identifiedPatterns.push(`Habitual wrong spare part photographed (${drvWrongPart}x)`);
+      } else if (drvWrongPart === 1) {
+        identifiedPatterns.push(`1x wrong spare part photo captured`);
+      }
+
+      if (drvWrongPos >= 2) {
+        identifiedPatterns.push(`Camera angle/lighting/distance issues (${drvWrongPos}x)`);
+      } else if (drvWrongPos === 1) {
+        identifiedPatterns.push(`1x improper camera angle`);
+      }
+
+      if (drvFalsePos >= 2) {
+        identifiedPatterns.push(`High false alarm rate: reports good parts as defective (${drvFalsePos}x)`);
+      } else if (drvFalsePos === 1) {
+        identifiedPatterns.push(`1x false positive (spare part had no issue)`);
+      }
+
+      if (drvFalseNeg >= 1) {
+        identifiedPatterns.push(`🚨 CRITICAL SAFETY RISK: Missed defect on vehicle inspection (${drvFalseNeg}x)`);
+      }
+
+      if (identifiedPatterns.length === 0 && drvTotalAudited > 0) {
+        identifiedPatterns.push('High inspection precision: 100% compliant with standard operating procedure');
+      }
+
+      const photoValidityRate = drvTotalAudited > 0 ? Math.round((drvCorrectPhotos / drvTotalAudited) * 100) : 100;
+      const assessmentAccuracyRate = drvTotalAudited > 0 ? Math.round((drvAccurate / drvTotalAudited) * 100) : 100;
+      const overallQualityScore = drvTotalAudited > 0
+        ? Math.round(((drvCorrectPhotos + drvAccurate) / (drvTotalAudited * 2)) * 100)
+        : 100;
+
+      depotAuditedPhotos += drvTotalAudited;
+      depotWrongPart += drvWrongPart;
+      depotWrongPos += drvWrongPos;
+      depotFalsePos += drvFalsePos;
+      depotFalseNeg += drvFalseNeg;
+
+      totalAuditedPhotos += drvTotalAudited;
+      correctPhotosCount += drvCorrectPhotos;
+      wrongPartCount += drvWrongPart;
+      wrongPositionCount += drvWrongPos;
+      falsePositivesCount += drvFalsePos;
+      falseNegativesCount += drvFalseNeg;
+
+      driverSummaries.push({
+        driverId: drvId,
+        driverName: drvName,
+        driverDepot: depotCode,
+        totalInspections: drvInspections.length,
+        totalPhotosAudited: drvTotalAudited,
+        correctPhotosCount: drvCorrectPhotos,
+        wrongPartCount: drvWrongPart,
+        wrongPositionCount: drvWrongPos,
+        accurateAssessmentsCount: drvAccurate,
+        falsePositivesCount: drvFalsePos,
+        falseNegativesCount: drvFalseNeg,
+        photoValidityRate,
+        assessmentAccuracyRate,
+        overallQualityScore,
+        identifiedPatterns,
+        mistakes,
+        inspections: drvRecentInspections,
+      });
+    }
+
+    // Sort drivers: lowest quality score first
+    driverSummaries.sort((a, b) => a.overallQualityScore - b.overallQualityScore);
+
+    const depotAccuracyRate = depotAuditedPhotos > 0
+      ? Math.round((((depotAuditedPhotos - depotWrongPart - depotWrongPos) + (depotAuditedPhotos - depotFalsePos - depotFalseNeg)) / (depotAuditedPhotos * 2)) * 100)
+      : 100;
+
+    depotGroups.push({
+      depotCode,
+      depotName: depotCode,
+      totalDrivers: driverSummaries.length,
+      totalInspections: driverSummaries.reduce((acc, d) => acc + d.totalInspections, 0),
+      totalPhotosAudited: depotAuditedPhotos,
+      wrongPartCount: depotWrongPart,
+      wrongPositionCount: depotWrongPos,
+      falsePositivesCount: depotFalsePos,
+      falseNegativesCount: depotFalseNeg,
+      depotAccuracyRate,
+      drivers: driverSummaries,
+    });
+  }
+
+  // Sort depots by compliance ascending (worst first)
+  depotGroups.sort((a, b) => a.depotAccuracyRate - b.depotAccuracyRate);
+
+  const overallAccuracyRate = totalAuditedPhotos > 0
+    ? Math.round((((totalAuditedPhotos - wrongPartCount - wrongPositionCount) + (totalAuditedPhotos - falsePositivesCount - falseNegativesCount)) / (totalAuditedPhotos * 2)) * 100)
+    : 100;
+  const photoValidityRate = totalAuditedPhotos > 0
+    ? Math.round((correctPhotosCount / totalAuditedPhotos) * 100)
+    : 100;
+
+  return {
+    summary: {
+      totalInspections: inspections.length,
+      totalAuditedPhotos,
+      totalDriversAudited,
+      correctPhotosCount,
+      wrongPartCount,
+      wrongPositionCount,
+      falsePositivesCount,
+      falseNegativesCount,
+      overallAccuracyRate,
+      photoValidityRate,
+    },
+    depotGroups,
+    dateRange: {
+      dateFrom: filters?.dateFrom || '',
+      dateTo: filters?.dateTo || '',
+    },
+  };
+}
+
+export function seedSampleDriverQaAudits(): { seededInspections: number; auditedPhotosCount: number } {
+  // If memoryStore has no inspections, seed historical inspections first
+  if (memoryStore.inspections.length === 0) {
+    seedHistoricalInspections(14);
+  }
+
+  const samplePhotoUrls = [
+    { url: '/sample-photos/front_left_tyre.jpg', itemId: 'tires_wheels', itemTitle: 'Tires & Wheels', slotName: 'Front-Left Tyre', slotIndex: 0 },
+    { url: '/sample-photos/front_right_tyre.jpg', itemId: 'tires_wheels', itemTitle: 'Tires & Wheels', slotName: 'Front-Right Tyre', slotIndex: 1 },
+    { url: '/sample-photos/radiator_coolant.jpg', itemId: 'radiator_coolant', itemTitle: 'Radiator Core & Coolant Reservoir', slotName: 'Radiator Core', slotIndex: 0 },
+    { url: '/sample-photos/engine_oil_dipstick.jpg', itemId: 'fluids_powertrain', itemTitle: 'Engine Oil Dipstick & Fluid Levels', slotName: 'Engine Oil Dipstick', slotIndex: 0 },
+    { url: '/sample-photos/diesel_fuel_cap.jpg', itemId: 'diesel_fuel_cap', itemTitle: 'Diesel Fuel Tank Cap & Seal', slotName: 'Fuel Tank Cap', slotIndex: 0 },
+    { url: '/sample-photos/dashboard_cluster_odometer.jpg', itemId: 'dashboard_warnings', itemTitle: 'Meter Cluster & Warning Lights', slotName: 'Dashboard Meter Cluster', slotIndex: 0 },
+  ];
+
+  let auditedPhotosCount = 0;
+  let seededInspections = 0;
+
+  // Ensure recent inspections have photos
+  const targetInspections = memoryStore.inspections.slice(0, 15);
+
+  targetInspections.forEach((insp, inspIndex) => {
+    seededInspections++;
+    if (!insp.photos || insp.photos.length === 0) {
+      insp.photos = samplePhotoUrls.map((sp) => ({
+        url: sp.url,
+        itemId: sp.itemId,
+        itemTitle: sp.itemTitle,
+        slotName: sp.slotName,
+        slotIndex: sp.slotIndex,
+        isDefect: false,
+        timestamp: insp.timestamp,
+        caption: `Watermark GPS Verified - ${insp.vehicleNo}`,
+        gps: insp.gpsLocation || { lat: 3.0334, lng: 101.7511, accuracy: 5, address: 'Balakong Inspection Bay' },
+      }));
+    }
+
+    // Assign realistic QA audits based on driver to show clear mistake patterns
+    const drvName = (insp.driverName || '').toUpperCase();
+    const isAzimul = drvName.includes('AZIMUL');
+    const isNizai = drvName.includes('NIZAI');
+    const isKhairil = drvName.includes('KHAIRIL');
+
+    insp.photos.forEach((photo, pIdx) => {
+      auditedPhotosCount++;
+      if (isAzimul) {
+        // High quality: 5 correct, 1 wrong position
+        if (pIdx === 2) {
+          photo.qaAudit = {
+            photoQuality: 'wrong_position',
+            accuracyType: 'accurate',
+            adminNote: 'Radiator photo taken too far; cannot see reservoir level clearly. Please retake closer.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 3600000 * (pIdx + 1)).toISOString(),
+          };
+        } else {
+          photo.qaAudit = {
+            photoQuality: 'correct',
+            accuracyType: 'accurate',
+            adminNote: 'Clear component angle, tread depth and markings legible.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 3600000 * (pIdx + 1)).toISOString(),
+          };
+        }
+      } else if (isNizai) {
+        // Driver Nizai: False alarms (False Positives) and 1 wrong part
+        if (pIdx === 0) {
+          photo.qaAudit = {
+            photoQuality: 'wrong_part',
+            accuracyType: 'accurate',
+            adminNote: 'Wrong spare part photographed: driver snapped mudguard instead of brake rotor / tyre tread.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 7200000).toISOString(),
+          };
+        } else if (pIdx === 1) {
+          photo.qaAudit = {
+            photoQuality: 'correct',
+            accuracyType: 'false_positive',
+            adminNote: 'Driver reported low tyre tread defect, but photo and workshop gauge verify 3.2mm tread depth. Spare part has NO issue.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 7200000).toISOString(),
+          };
+        } else if (pIdx === 4) {
+          photo.qaAudit = {
+            photoQuality: 'correct',
+            accuracyType: 'false_positive',
+            adminNote: 'Driver claimed diesel fuel cap gasket missing; photo clearly shows gasket intact and tight.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 7200000).toISOString(),
+          };
+        } else {
+          photo.qaAudit = {
+            photoQuality: 'correct',
+            accuracyType: 'accurate',
+            adminNote: 'Verified compliant.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 7200000).toISOString(),
+          };
+        }
+      } else if (isKhairil) {
+        // Driver Khairil: 1 False Negative (CRITICAL MISSED DEFECT) and 1 wrong angle
+        if (pIdx === 0) {
+          photo.qaAudit = {
+            photoQuality: 'correct',
+            accuracyType: 'false_negative',
+            adminNote: 'CRITICAL: Driver marked PASS, but photo clearly shows severe sidewall cut and low inflation! Vehicle must be checked immediately.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 10800000).toISOString(),
+          };
+        } else if (pIdx === 3) {
+          photo.qaAudit = {
+            photoQuality: 'wrong_position',
+            accuracyType: 'accurate',
+            adminNote: 'Engine dipstick photo severely blurred with camera glare; level unreadable.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 10800000).toISOString(),
+          };
+        } else {
+          photo.qaAudit = {
+            photoQuality: 'correct',
+            accuracyType: 'accurate',
+            adminNote: 'Checked and compliant.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 10800000).toISOString(),
+          };
+        }
+      } else {
+        // Default pattern for other drivers
+        if (pIdx === 0 && inspIndex % 3 === 0) {
+          photo.qaAudit = {
+            photoQuality: 'wrong_part',
+            accuracyType: 'accurate',
+            adminNote: 'Wrong part captured; photographed wheel rim surface instead of tire tread depth.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 14400000).toISOString(),
+          };
+        } else if (pIdx === 1 && inspIndex % 4 === 0) {
+          photo.qaAudit = {
+            photoQuality: 'correct',
+            accuracyType: 'false_positive',
+            adminNote: 'False alarm: driver reported fluid leak, but confirmed to be water dripping from A/C condenser drain pipe.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 14400000).toISOString(),
+          };
+        } else {
+          photo.qaAudit = {
+            photoQuality: 'correct',
+            accuracyType: 'accurate',
+            adminNote: 'Verified compliant photo and part condition.',
+            auditedBy: 'Steve Wong (Admin)',
+            auditedAt: new Date(Date.now() - 14400000).toISOString(),
+          };
+        }
+      }
+    });
+
+    insp.qaAuditedAt = new Date().toISOString();
+    insp.qaAuditedBy = 'Steve Wong (Admin)';
+  });
+
+  saveStore(true);
+  scheduleDebouncedBackup();
+
+  addAuditLog({
+    eventType: 'QA_DEMO_SEED',
+    operator: 'Admin Executive Portal',
+    ip: '127.0.0.1',
+    details: `Seeded ${auditedPhotosCount} sample QA audits across ${seededInspections} inspections illustrating mistake patterns, false alarms, and wrong photo positions.`,
+    severity: 'info',
+  });
+
+  return { seededInspections, auditedPhotosCount };
+}
+
+// ----------------- UNINSPECTED DRIVERS AUDIT COMPLIANCE REPORT -----------------
+
+export interface UninspectedDriverItem {
+  employeeId: string;
+  loginId: string;
+  name: string;
+  depot: string;
+  depotName: string;
+  designation: string;
+  phone: string;
+  status: 'A' | 'I';
+  avatarUrl?: string;
+  totalDays: number;
+  missedCount: number;
+  inspectedCount: number;
+  missedDates: string[];
+  inspectedDates: string[];
+  complianceRate: number;
+  complianceStatus: 'Non-Compliant' | 'Partially Compliant' | 'Fully Compliant';
+  latestInspectionDate?: string;
+  assignedRoute?: string;
+  assignedVehicle?: string;
+}
+
+export interface UninspectedDriversReportResult {
+  summary: {
+    totalActiveDrivers: number;
+    uninspectedDriversCount: number;
+    fullyCompliantCount: number;
+    overallComplianceRate: number;
+    dateFrom: string;
+    dateTo: string;
+    depot: string;
+    totalDays: number;
+  };
+  drivers: UninspectedDriverItem[];
+  dailyRoster: {
+    date: string;
+    formattedDate: string;
+    dayOfWeek: string;
+    totalDrivers: number;
+    uninspectedCount: number;
+    compliantCount: number;
+    missingDrivers: {
+      employeeId: string;
+      loginId: string;
+      name: string;
+      depot: string;
+      designation: string;
+      phone: string;
+    }[];
+  }[];
+}
+
+export function getUninspectedDriversReport(filters?: {
+  date?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  depot?: string;
+  search?: string;
+  designation?: string;
+  sortBy?: 'missedCount' | 'name' | 'depot' | 'employeeId';
+  sortOrder?: 'asc' | 'desc';
+}): UninspectedDriversReportResult {
+  const todayStr = getCalendarDateString(new Date());
+
+  let fromStr = (filters?.dateFrom || filters?.date || todayStr).trim();
+  let toStr = (filters?.dateTo || filters?.date || fromStr).trim();
+
+  // Validate format
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromStr)) fromStr = todayStr;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(toStr)) toStr = fromStr;
+
+  if (fromStr > toStr) {
+    const temp = fromStr;
+    fromStr = toStr;
+    toStr = temp;
+  }
+
+  // Cap at 60 days to prevent excessive loops
+  const dateList: string[] = [];
+  const cur = new Date(fromStr + 'T00:00:00Z');
+  const end = new Date(toStr + 'T00:00:00Z');
+
+  let loopLimit = 60;
+  while (cur <= end && loopLimit > 0) {
+    const y = cur.getUTCFullYear();
+    const m = String(cur.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(cur.getUTCDate()).padStart(2, '0');
+    dateList.push(`${y}-${m}-${d}`);
+    cur.setUTCDate(cur.getUTCDate() + 1);
+    loopLimit--;
+  }
+
+  if (dateList.length === 0) {
+    dateList.push(todayStr);
+  }
+
+  // Normalize identity values so legacy records with different casing, spaces,
+  // or punctuation still match the current driver.
+  // Keep the calendar date as a separate key so an inspection on another day
+  // can never satisfy the selected date.
+  const normalizeInspectionIdentity = (value: unknown): string =>
+    String(value ?? '')
+      .normalize('NFKC')
+      .trim()
+      .toUpperCase()
+      .replace(/\.0+$/, '')
+      .replace(/[^A-Z0-9]/g, '');
+
+  const inspectionMap = new Map<string, Set<string>>();
+
+  for (const insp of memoryStore.inspections) {
+    // Use the same Malaysia-local calendar-date resolver as the Inspection Audit.
+    const dStr = getCalendarDateString(insp);
+    if (!dStr) continue;
+
+    const identities = new Set<string>([
+      normalizeInspectionIdentity(insp.driverId),
+      normalizeInspectionIdentity(insp.driverName),
+    ].filter(Boolean));
+
+    for (const identity of identities) {
+      if (!inspectionMap.has(identity)) inspectionMap.set(identity, new Set<string>());
+      inspectionMap.get(identity)!.add(dStr);
+    }
+  }
+
+  const driverVehicleMap = new Map<string, string>();
+  for (const v of memoryStore.vehicles) {
+    if (v.lastDriverName && v.vehicleNo) {
+      driverVehicleMap.set(normalizeInspectionIdentity(v.lastDriverName), v.vehicleNo);
+    }
+  }
+
+  const filterDepot = (filters?.depot && filters.depot !== 'ALL') ? filters.depot.trim().toUpperCase() : null;
+  const searchFilter = (filters?.search || '').trim().toLowerCase();
+  const desigFilter = (filters?.designation && filters.designation !== 'ALL') ? filters.designation.trim().toUpperCase() : null;
+
+  let activeDrivers = memoryStore.drivers.filter(d => (d.status || 'A') === 'A');
+
+  if (filterDepot) {
+    activeDrivers = activeDrivers.filter(d => (d.depot || '').toUpperCase() === filterDepot);
+  }
+
+  if (desigFilter) {
+    activeDrivers = activeDrivers.filter(d => (d.designation || '').toUpperCase().includes(desigFilter));
+  }
+
+  if (searchFilter) {
+    activeDrivers = activeDrivers.filter(d =>
+      (d.name || '').toLowerCase().includes(searchFilter) ||
+      (d.employeeId || '').toLowerCase().includes(searchFilter) ||
+      (d.loginId || '').toLowerCase().includes(searchFilter) ||
+      (d.phone || '').toLowerCase().includes(searchFilter) ||
+      (d.depot || '').toLowerCase().includes(searchFilter)
+    );
+  }
+
+  const driverResults: UninspectedDriverItem[] = [];
+  let totalDriverDays = 0;
+  let totalInspectedDays = 0;
+
+  for (const drv of activeDrivers) {
+    const missedDates: string[] = [];
+    const inspectedDates: string[] = [];
+    let latestInspDate: string | undefined = undefined;
+
+    const nameKey = normalizeInspectionIdentity(drv.name);
+    const driverIdentities = new Set<string>([
+      normalizeInspectionIdentity(drv.employeeId),
+      normalizeInspectionIdentity(drv.loginId),
+      nameKey,
+    ].filter(Boolean));
+
+    for (const d of dateList) {
+      const hasInsp = Array.from(driverIdentities).some(identity =>
+        inspectionMap.get(identity)?.has(d) === true
+      );
+
+      if (hasInsp) {
+        inspectedDates.push(d);
+        if (!latestInspDate || d > latestInspDate) {
+          latestInspDate = d;
+        }
+      } else {
+        missedDates.push(d);
+      }
+    }
+
+    totalDriverDays += dateList.length;
+    totalInspectedDays += inspectedDates.length;
+
+    const missedCount = missedDates.length;
+    const inspectedCount = inspectedDates.length;
+    const complianceRate = Math.round((inspectedCount / dateList.length) * 100);
+
+    const complianceStatus: 'Non-Compliant' | 'Partially Compliant' | 'Fully Compliant' =
+      missedCount === 0
+        ? 'Fully Compliant'
+        : inspectedCount === 0
+        ? 'Non-Compliant'
+        : 'Partially Compliant';
+
+    driverResults.push({
+      employeeId: drv.employeeId || drv.loginId,
+      loginId: drv.loginId,
+      name: drv.name,
+      depot: drv.depot,
+      depotName: drv.depotName || drv.depot,
+      designation: drv.designation || 'DRIVER',
+      phone: drv.phone || '',
+      status: drv.status || 'A',
+      totalDays: dateList.length,
+      missedCount,
+      inspectedCount,
+      missedDates,
+      inspectedDates,
+      complianceRate,
+      complianceStatus,
+      latestInspectionDate: latestInspDate,
+      assignedVehicle: driverVehicleMap.get(nameKey) || undefined,
+    });
+  }
+
+  // Sorting
+  const sortBy = filters?.sortBy || 'missedCount';
+  const sortOrder = filters?.sortOrder || 'desc';
+
+  driverResults.sort((a, b) => {
+    let cmp = 0;
+    if (sortBy === 'missedCount') {
+      cmp = a.missedCount - b.missedCount;
+      if (cmp === 0) cmp = a.name.localeCompare(b.name);
+    } else if (sortBy === 'name') {
+      cmp = a.name.localeCompare(b.name);
+    } else if (sortBy === 'depot') {
+      cmp = a.depot.localeCompare(b.depot);
+    } else if (sortBy === 'employeeId') {
+      cmp = a.employeeId.localeCompare(b.employeeId);
+    }
+    return sortOrder === 'desc' ? -cmp : cmp;
+  });
+
+  // Daily roster
+  const dailyRoster = dateList.map(dateStr => {
+    const missingForDay = driverResults.filter(d => d.missedDates.includes(dateStr)).map(d => ({
+      employeeId: d.employeeId,
+      loginId: d.loginId,
+      name: d.name,
+      depot: d.depot,
+      designation: d.designation,
+      phone: d.phone,
+    }));
+
+    const dateObj = new Date(dateStr + 'T00:00:00Z');
+    const dayOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dateObj.getUTCDay()];
+    const parts = dateStr.split('-');
+    const formattedDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+
+    return {
+      date: dateStr,
+      formattedDate,
+      dayOfWeek,
+      totalDrivers: activeDrivers.length,
+      uninspectedCount: missingForDay.length,
+      compliantCount: activeDrivers.length - missingForDay.length,
+      missingDrivers: missingForDay,
+    };
+  });
+
+  const uninspectedOnly = driverResults.filter(d => d.missedCount > 0);
+  const fullyCompliant = driverResults.filter(d => d.missedCount === 0);
+  const overallComplianceRate = totalDriverDays > 0
+    ? Math.round((totalInspectedDays / totalDriverDays) * 100)
+    : 100;
+
+  return {
+    summary: {
+      totalActiveDrivers: activeDrivers.length,
+      uninspectedDriversCount: uninspectedOnly.length,
+      fullyCompliantCount: fullyCompliant.length,
+      overallComplianceRate,
+      dateFrom: fromStr,
+      dateTo: toStr,
+      depot: filterDepot || 'ALL',
+      totalDays: dateList.length,
+    },
+    drivers: driverResults,
+    dailyRoster,
+  };
 }
 
 export function clearAllInspections(): void {
