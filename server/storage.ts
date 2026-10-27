@@ -187,16 +187,15 @@ export function initStore() {
         console.log(`[Storage] Configured Public QR Base URL: ${memoryStore.settings.publicBaseUrl}`);
       }
 
-      if (memoryStore.vehicles.length === 0 && memoryStore.drivers.length === 0) {
+      const isDemoPurged = Boolean((memoryStore.settings as any)?.demoPurged);
+      if (!isDemoPurged && memoryStore.vehicles.length === 0 && memoryStore.drivers.length === 0) {
         memoryStore.vehicles = [...INITIAL_VEHICLES];
         memoryStore.drivers = [...INITIAL_DRIVERS];
         memoryStore.vehicles.forEach((v) => {
           if (!v.qrToken) v.qrToken = generateVehicleQrToken();
         });
-        seedHistoricalInspections(20);
-        seedSampleDriverQaAudits();
-        saveStoreSync();
-        console.log(`[Storage] Re-seeded with ${memoryStore.vehicles.length} vehicles, ${memoryStore.drivers.length} drivers, and sample audits.`);
+        saveStore(true);
+        console.log(`[Storage] Re-seeded with ${memoryStore.vehicles.length} vehicles and ${memoryStore.drivers.length} drivers.`);
       }
 
       // Ensure all vehicles (including legacy/existing) have a unified static QR security token
@@ -222,19 +221,14 @@ export function initStore() {
         console.log(`[Storage] Auto-seeded initial inspections with driver QA audits.`);
       }
     } else {
-      // Clean start with starter vehicles, drivers, and pre-trip inspection audits
-      memoryStore.vehicles = [...INITIAL_VEHICLES];
-      memoryStore.drivers = [...INITIAL_DRIVERS];
-      memoryStore.vehicles.forEach((v) => {
-        if (!v.qrToken) v.qrToken = generateVehicleQrToken();
-      });
+      // Clean start
+      memoryStore.vehicles = [];
+      memoryStore.drivers = [];
       memoryStore.inspections = [];
       memoryStore.auditLogs = [];
       memoryStore.settings = { publicBaseUrl: envPublicUrl };
-      seedHistoricalInspections(20);
-      seedSampleDriverQaAudits();
-      saveStoreSync();
-      console.log(`[Storage] Initialized store with starter vehicles, drivers, and inspection audits.`);
+      saveStore(true);
+      console.log(`[Storage] Initialized clean empty store ready for real database.`);
     }
 
     // Initialize Master Operations Hierarchy (Regions, Depots, Routes)
@@ -289,65 +283,10 @@ export function initStore() {
             }
 
             if (dbI.length > 0) {
-              // Intelligent Merge: Retain QA audits, photo mistake audits, and non-overwritten fields
-              const localMap = new Map<string, InspectionRecord>();
-              for (const loc of memoryStore.inspections) {
-                if (loc && loc.id) localMap.set(loc.id, loc);
-              }
-
-              const mergedList: InspectionRecord[] = [];
-              const seenIds = new Set<string>();
-
-              for (const dbRec of dbI) {
-                seenIds.add(dbRec.id);
-                const localRec = localMap.get(dbRec.id);
-                if (localRec) {
-                  // If local record has QA audit decisions, preserve them!
-                  const hasLocalQa = localRec.qaAudits && Object.keys(localRec.qaAudits).length > 0;
-                  const hasDbQa = dbRec.qaAudits && Object.keys(dbRec.qaAudits).length > 0;
-
-                  const mergedQaAudits = hasDbQa ? { ...localRec.qaAudits, ...dbRec.qaAudits } : (localRec.qaAudits || dbRec.qaAudits);
-                  const mergedQaAuditedAt = dbRec.qaAuditedAt || localRec.qaAuditedAt;
-                  const mergedQaAuditedBy = dbRec.qaAuditedBy || localRec.qaAuditedBy;
-
-                  // Merge photos: keep local photos if DB photos array is empty
-                  let mergedPhotos = (dbRec.photos && dbRec.photos.length > 0) ? dbRec.photos : (localRec.photos || []);
-                  if (localRec.photos && localRec.photos.length > 0 && mergedPhotos.length > 0) {
-                    mergedPhotos = mergedPhotos.map(p => {
-                      const lp = localRec.photos.find(x => x.url === p.url || x.slotName === p.slotName || x.itemId === p.itemId);
-                      return {
-                        ...p,
-                        qaAudit: p.qaAudit || lp?.qaAudit,
-                      };
-                    });
-                  }
-
-                  mergedList.push({
-                    ...dbRec,
-                    qaAudits: mergedQaAudits,
-                    qaAuditedAt: mergedQaAuditedAt,
-                    qaAuditedBy: mergedQaAuditedBy,
-                    photos: mergedPhotos,
-                    items: (dbRec.items && dbRec.items.length > 0) ? dbRec.items : (localRec.items || []),
-                  });
-                } else {
-                  mergedList.push(dbRec);
-                }
-              }
-
-              // Preserve any locally created inspections not yet in DB
-              for (const [id, localRec] of localMap.entries()) {
-                if (!seenIds.has(id)) {
-                  mergedList.push(localRec);
-                }
-              }
-
-              memoryStore.inspections = mergedList;
+              memoryStore.inspections = dbI;
             } else {
-              // If SQL Server Inspections table is empty, do NOT discard local inspections with audits!
-              if (memoryStore.inspections.length > 0) {
-                console.log(`[MSSQL Safe Sync] SQL Server Inspections table has 0 rows. Preserving ${memoryStore.inspections.length} local inspection records with QA audits.`);
-              }
+              console.log(`[MSSQL Production Safe Sync] SQL Server Inspections table is empty. Discarded local mock inspections.`);
+              memoryStore.inspections = [];
             }
 
             if (dbA.length > 0) {
@@ -1640,9 +1579,8 @@ export function updateInspectionPhotoQa(
   record.qaAuditedAt = new Date().toISOString();
   record.qaAuditedBy = qaAudit.auditedBy || 'Admin';
 
-  saveStoreSync();
+  saveStore(true);
   scheduleDebouncedBackup();
-  dbSaveInspection(record).catch(e => console.error('[MSSQL Error] Saving QA audit to SQL Server:', e));
 
   addAuditLog({
     eventType: 'PHOTO_QA_AUDIT',
@@ -2116,291 +2054,6 @@ export function seedSampleDriverQaAudits(): { seededInspections: number; audited
   });
 
   return { seededInspections, auditedPhotosCount };
-}
-
-// ----------------- UNINSPECTED DRIVERS AUDIT COMPLIANCE REPORT -----------------
-
-export interface UninspectedDriverItem {
-  employeeId: string;
-  loginId: string;
-  name: string;
-  depot: string;
-  depotName: string;
-  designation: string;
-  phone: string;
-  status: 'A' | 'I';
-  avatarUrl?: string;
-  totalDays: number;
-  missedCount: number;
-  inspectedCount: number;
-  missedDates: string[];
-  inspectedDates: string[];
-  complianceRate: number;
-  complianceStatus: 'Non-Compliant' | 'Partially Compliant' | 'Fully Compliant';
-  latestInspectionDate?: string;
-  assignedRoute?: string;
-  assignedVehicle?: string;
-}
-
-export interface UninspectedDriversReportResult {
-  summary: {
-    totalActiveDrivers: number;
-    uninspectedDriversCount: number;
-    fullyCompliantCount: number;
-    overallComplianceRate: number;
-    dateFrom: string;
-    dateTo: string;
-    depot: string;
-    totalDays: number;
-  };
-  drivers: UninspectedDriverItem[];
-  dailyRoster: {
-    date: string;
-    formattedDate: string;
-    dayOfWeek: string;
-    totalDrivers: number;
-    uninspectedCount: number;
-    compliantCount: number;
-    missingDrivers: {
-      employeeId: string;
-      loginId: string;
-      name: string;
-      depot: string;
-      designation: string;
-      phone: string;
-    }[];
-  }[];
-}
-
-export function getUninspectedDriversReport(filters?: {
-  date?: string;
-  dateFrom?: string;
-  dateTo?: string;
-  depot?: string;
-  search?: string;
-  designation?: string;
-  sortBy?: 'missedCount' | 'name' | 'depot' | 'employeeId';
-  sortOrder?: 'asc' | 'desc';
-}): UninspectedDriversReportResult {
-  const todayStr = getCalendarDateString(new Date());
-
-  let fromStr = (filters?.dateFrom || filters?.date || todayStr).trim();
-  let toStr = (filters?.dateTo || filters?.date || fromStr).trim();
-
-  // Validate format
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromStr)) fromStr = todayStr;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(toStr)) toStr = fromStr;
-
-  if (fromStr > toStr) {
-    const temp = fromStr;
-    fromStr = toStr;
-    toStr = temp;
-  }
-
-  // Cap at 60 days to prevent excessive loops
-  const dateList: string[] = [];
-  const cur = new Date(fromStr + 'T00:00:00Z');
-  const end = new Date(toStr + 'T00:00:00Z');
-
-  let loopLimit = 60;
-  while (cur <= end && loopLimit > 0) {
-    const y = cur.getUTCFullYear();
-    const m = String(cur.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(cur.getUTCDate()).padStart(2, '0');
-    dateList.push(`${y}-${m}-${d}`);
-    cur.setUTCDate(cur.getUTCDate() + 1);
-    loopLimit--;
-  }
-
-  if (dateList.length === 0) {
-    dateList.push(todayStr);
-  }
-
-  // Pre-index inspections by driver and calendar date for fast lookup
-  const inspectionMap = new Map<string, InspectionRecord[]>();
-
-  for (const insp of memoryStore.inspections) {
-    const dStr = getCalendarDateString(insp);
-    if (!dStr) continue;
-
-    const keys: string[] = [];
-    if (insp.driverId) {
-      keys.push(`${insp.driverId.trim().toUpperCase()}_${dStr}`);
-    }
-    if (insp.driverName) {
-      keys.push(`${insp.driverName.trim().toUpperCase()}_${dStr}`);
-    }
-
-    for (const k of keys) {
-      if (!inspectionMap.has(k)) {
-        inspectionMap.set(k, []);
-      }
-      inspectionMap.get(k)!.push(insp);
-    }
-  }
-
-  const driverVehicleMap = new Map<string, string>();
-  for (const v of memoryStore.vehicles) {
-    if (v.lastDriverName && v.vehicleNo) {
-      driverVehicleMap.set(v.lastDriverName.trim().toUpperCase(), v.vehicleNo);
-    }
-  }
-
-  const filterDepot = (filters?.depot && filters.depot !== 'ALL') ? filters.depot.trim().toUpperCase() : null;
-  const searchFilter = (filters?.search || '').trim().toLowerCase();
-  const desigFilter = (filters?.designation && filters.designation !== 'ALL') ? filters.designation.trim().toUpperCase() : null;
-
-  let activeDrivers = memoryStore.drivers.filter(d => (d.status || 'A') === 'A');
-
-  if (filterDepot) {
-    activeDrivers = activeDrivers.filter(d => (d.depot || '').toUpperCase() === filterDepot);
-  }
-
-  if (desigFilter) {
-    activeDrivers = activeDrivers.filter(d => (d.designation || '').toUpperCase().includes(desigFilter));
-  }
-
-  if (searchFilter) {
-    activeDrivers = activeDrivers.filter(d =>
-      (d.name || '').toLowerCase().includes(searchFilter) ||
-      (d.employeeId || '').toLowerCase().includes(searchFilter) ||
-      (d.loginId || '').toLowerCase().includes(searchFilter) ||
-      (d.phone || '').toLowerCase().includes(searchFilter) ||
-      (d.depot || '').toLowerCase().includes(searchFilter)
-    );
-  }
-
-  const driverResults: UninspectedDriverItem[] = [];
-  let totalDriverDays = 0;
-  let totalInspectedDays = 0;
-
-  for (const drv of activeDrivers) {
-    const missedDates: string[] = [];
-    const inspectedDates: string[] = [];
-    let latestInspDate: string | undefined = undefined;
-
-    const empKey = (drv.employeeId || '').trim().toUpperCase();
-    const logKey = (drv.loginId || '').trim().toUpperCase();
-    const nameKey = (drv.name || '').trim().toUpperCase();
-
-    for (const d of dateList) {
-      const hasInsp =
-        (empKey && inspectionMap.has(`${empKey}_${d}`)) ||
-        (logKey && inspectionMap.has(`${logKey}_${d}`)) ||
-        (nameKey && inspectionMap.has(`${nameKey}_${d}`));
-
-      if (hasInsp) {
-        inspectedDates.push(d);
-        if (!latestInspDate || d > latestInspDate) {
-          latestInspDate = d;
-        }
-      } else {
-        missedDates.push(d);
-      }
-    }
-
-    totalDriverDays += dateList.length;
-    totalInspectedDays += inspectedDates.length;
-
-    const missedCount = missedDates.length;
-    const inspectedCount = inspectedDates.length;
-    const complianceRate = Math.round((inspectedCount / dateList.length) * 100);
-
-    const complianceStatus: 'Non-Compliant' | 'Partially Compliant' | 'Fully Compliant' =
-      missedCount === 0
-        ? 'Fully Compliant'
-        : inspectedCount === 0
-        ? 'Non-Compliant'
-        : 'Partially Compliant';
-
-    driverResults.push({
-      employeeId: drv.employeeId || drv.loginId,
-      loginId: drv.loginId,
-      name: drv.name,
-      depot: drv.depot,
-      depotName: drv.depotName || drv.depot,
-      designation: drv.designation || 'DRIVER',
-      phone: drv.phone || '',
-      status: drv.status || 'A',
-      avatarUrl: drv.avatarUrl,
-      totalDays: dateList.length,
-      missedCount,
-      inspectedCount,
-      missedDates,
-      inspectedDates,
-      complianceRate,
-      complianceStatus,
-      latestInspectionDate: latestInspDate,
-      assignedVehicle: driverVehicleMap.get(nameKey) || undefined,
-    });
-  }
-
-  // Sorting
-  const sortBy = filters?.sortBy || 'missedCount';
-  const sortOrder = filters?.sortOrder || 'desc';
-
-  driverResults.sort((a, b) => {
-    let cmp = 0;
-    if (sortBy === 'missedCount') {
-      cmp = a.missedCount - b.missedCount;
-      if (cmp === 0) cmp = a.name.localeCompare(b.name);
-    } else if (sortBy === 'name') {
-      cmp = a.name.localeCompare(b.name);
-    } else if (sortBy === 'depot') {
-      cmp = a.depot.localeCompare(b.depot);
-    } else if (sortBy === 'employeeId') {
-      cmp = a.employeeId.localeCompare(b.employeeId);
-    }
-    return sortOrder === 'desc' ? -cmp : cmp;
-  });
-
-  // Daily roster
-  const dailyRoster = dateList.map(dateStr => {
-    const missingForDay = driverResults.filter(d => d.missedDates.includes(dateStr)).map(d => ({
-      employeeId: d.employeeId,
-      loginId: d.loginId,
-      name: d.name,
-      depot: d.depot,
-      designation: d.designation,
-      phone: d.phone,
-    }));
-
-    const dateObj = new Date(dateStr + 'T00:00:00Z');
-    const dayOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dateObj.getUTCDay()];
-    const parts = dateStr.split('-');
-    const formattedDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
-
-    return {
-      date: dateStr,
-      formattedDate,
-      dayOfWeek,
-      totalDrivers: activeDrivers.length,
-      uninspectedCount: missingForDay.length,
-      compliantCount: activeDrivers.length - missingForDay.length,
-      missingDrivers: missingForDay,
-    };
-  });
-
-  const uninspectedOnly = driverResults.filter(d => d.missedCount > 0);
-  const fullyCompliant = driverResults.filter(d => d.missedCount === 0);
-  const overallComplianceRate = totalDriverDays > 0
-    ? Math.round((totalInspectedDays / totalDriverDays) * 100)
-    : 100;
-
-  return {
-    summary: {
-      totalActiveDrivers: activeDrivers.length,
-      uninspectedDriversCount: uninspectedOnly.length,
-      fullyCompliantCount: fullyCompliant.length,
-      overallComplianceRate,
-      dateFrom: fromStr,
-      dateTo: toStr,
-      depot: filterDepot || 'ALL',
-      totalDays: dateList.length,
-    },
-    drivers: driverResults,
-    dailyRoster,
-  };
 }
 
 export function clearAllInspections(): void {
