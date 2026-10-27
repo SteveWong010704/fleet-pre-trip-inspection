@@ -94,6 +94,7 @@ export const ADMIN_FEATURES: RbacFeature[] = [
   { id: 'drivers', label: 'Drivers & Accounts', category: 'Operations', description: 'Driver directory, PIN resets, SPV multi-trip designations, and accounts' },
   { id: 'operations', label: 'Manage Route, Depo, Region', category: 'Operations', description: 'Depot hubs, geographic regions, delivery route allocations, and master sync' },
   { id: 'history', label: 'Inspection Audit & Export', category: 'Audits & Security', description: 'Pre-trip log archive, digital certificates, fault records, and statutory PDF/Excel exports' },
+  { id: 'qa_pattern', label: 'Driver QA & Mistake Patterns', category: 'Audits & Security', description: 'Inspection photo verification, wrong spare part / angle audit, false positive/negative analysis, and driver pattern reports' },
   { id: 'bulk', label: 'Bulk Upload & Auto-QR', category: 'Fleet & Assets', description: 'Spreadsheet import batch processor and automatic QR code generation' },
   { id: 'qr', label: 'QR Label Generator', category: 'Fleet & Assets', description: 'Physical high-entropy QR windshield decals and printable label sheets' },
   { id: 'logs', label: 'Security Audit Logs', category: 'Audits & Security', description: 'Forensic tamper-evident audit trails, operator logins, and IP tracking' },
@@ -177,6 +178,17 @@ export interface InspectionCheckItem {
   systemChecks?: Record<string, boolean>;
 }
 
+export type PhotoQuality = 'correct' | 'wrong_part' | 'wrong_position';
+export type AssessmentAccuracy = 'accurate' | 'false_positive' | 'false_negative';
+
+export interface PhotoQaAudit {
+  photoQuality: PhotoQuality; // 'correct' = valid part & angle, 'wrong_part' = wrong spare part photographed, 'wrong_position' = bad angle/blurry/too far
+  accuracyType: AssessmentAccuracy; // 'accurate' = driver claim matched, 'false_positive' = spare part had NO issue but driver reported defect, 'false_negative' = defect present but driver marked pass
+  adminNote?: string;
+  auditedBy: string;
+  auditedAt: string;
+}
+
 export interface InspectionPhoto {
   url: string;
   itemId?: string;
@@ -192,6 +204,7 @@ export interface InspectionPhoto {
     accuracy?: number;
     address?: string;
   };
+  qaAudit?: PhotoQaAudit;
 }
 
 export interface InspectionRecord {
@@ -227,6 +240,9 @@ export interface InspectionRecord {
   primaryPhotoUrl?: string;
   photoCount?: number;
   photos: InspectionPhoto[];
+  qaAudits?: Record<string, PhotoQaAudit>; // Keyed by photo URL or itemId
+  qaAuditedAt?: string;
+  qaAuditedBy?: string;
   gpsLocation?: {
     lat: number;
     lng: number;
@@ -641,4 +657,142 @@ export interface ExecutiveAnalyticsData {
     selectedCategory: string;
     generatedAt: string;
   };
+}
+
+// ================= DRIVER QA & MISTAKE PATTERN REPORT TYPES =================
+export interface DriverMistakeItem {
+  id: string;
+  inspectionId: string;
+  formattedDate: string;
+  timestamp: string;
+  vehicleNo: string;
+  vehicleBranch: string;
+  driverId: string;
+  driverName: string;
+  driverDepot: string;
+  itemId: string;
+  itemTitle: string;
+  photoUrl: string;
+  driverClaimStatus: 'Pass' | 'Fail';
+  photoQuality: PhotoQuality;
+  accuracyType: AssessmentAccuracy;
+  adminNote?: string;
+  auditedBy: string;
+  auditedAt: string;
+}
+
+export interface DriverAuditedInspectionRef {
+  id: string;
+  formattedDate: string;
+  timestamp: string;
+  vehicleNo: string;
+  vehicleBranch: string;
+  overallResult: string;
+  auditedPhotosCount: number;
+  mistakesCount: number;
+}
+
+export interface DriverQaPatternSummary {
+  driverId: string;
+  driverName: string;
+  driverDepot: string;
+  totalInspections: number;
+  totalPhotosAudited: number;
+  correctPhotosCount: number;
+  wrongPartCount: number;
+  wrongPositionCount: number;
+  accurateAssessmentsCount: number;
+  falsePositivesCount: number; // Spare part OK, driver said issue
+  falseNegativesCount: number; // Defect present, driver passed (CRITICAL)
+  photoValidityRate: number; // percentage (0-100)
+  assessmentAccuracyRate: number; // percentage (0-100)
+  overallQualityScore: number; // percentage (0-100)
+  identifiedPatterns: string[];
+  mistakes: DriverMistakeItem[];
+  inspections: DriverAuditedInspectionRef[];
+}
+
+export interface DepotQaPatternGroup {
+  depotCode: string;
+  depotName: string;
+  totalDrivers: number;
+  totalInspections: number;
+  totalPhotosAudited: number;
+  wrongPartCount: number;
+  wrongPositionCount: number;
+  falsePositivesCount: number;
+  falseNegativesCount: number;
+  depotAccuracyRate: number;
+  drivers: DriverQaPatternSummary[];
+}
+
+export interface DriverQaReportResult {
+  summary: {
+    totalInspections: number;
+    totalAuditedPhotos: number;
+    totalDriversAudited: number;
+    correctPhotosCount: number;
+    wrongPartCount: number;
+    wrongPositionCount: number;
+    falsePositivesCount: number;
+    falseNegativesCount: number;
+    overallAccuracyRate: number;
+    photoValidityRate: number;
+  };
+  depotGroups: DepotQaPatternGroup[];
+  dateRange: {
+    dateFrom: string;
+    dateTo: string;
+  };
+}
+
+export interface UninspectedDriverItem {
+  employeeId: string;
+  loginId: string;
+  name: string;
+  depot: string;
+  depotName: string;
+  designation: string;
+  phone: string;
+  status: 'A' | 'I';
+  totalDays: number;
+  missedCount: number;
+  inspectedCount: number;
+  missedDates: string[];
+  inspectedDates: string[];
+  complianceRate: number;
+  complianceStatus: 'Non-Compliant' | 'Partially Compliant' | 'Fully Compliant';
+  latestInspectionDate?: string;
+  assignedRoute?: string;
+  assignedVehicle?: string;
+}
+
+export interface UninspectedDriversReportResult {
+  summary: {
+    totalActiveDrivers: number;
+    uninspectedDriversCount: number;
+    fullyCompliantCount: number;
+    overallComplianceRate: number;
+    dateFrom: string;
+    dateTo: string;
+    depot: string;
+    totalDays: number;
+  };
+  drivers: UninspectedDriverItem[];
+  dailyRoster: {
+    date: string;
+    formattedDate: string;
+    dayOfWeek: string;
+    totalDrivers: number;
+    uninspectedCount: number;
+    compliantCount: number;
+    missingDrivers: {
+      employeeId: string;
+      loginId: string;
+      name: string;
+      depot: string;
+      designation: string;
+      phone: string;
+    }[];
+  }[];
 }

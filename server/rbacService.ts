@@ -28,7 +28,7 @@ export const DEFAULT_ROLES: RbacRole[] = [
     name: 'Logistic Admin',
     description: 'Fleet catalog management, operations depot & route allocation, bulk spreadsheet uploads, and vehicle QR decals.',
     isSystem: false,
-    permissions: ['fleet', 'operations', 'bulk', 'qr', 'history'],
+    permissions: ['fleet', 'operations', 'bulk', 'qr', 'history', 'qa_pattern'],
     createdAt: new Date().toISOString(),
   },
   {
@@ -36,7 +36,7 @@ export const DEFAULT_ROLES: RbacRole[] = [
     name: 'Sales Operation',
     description: 'Executive analytics inspection compliance trends, depot route status, and historical audit certificate review.',
     isSystem: false,
-    permissions: ['analytics', 'operations', 'history'],
+    permissions: ['analytics', 'operations', 'history', 'qa_pattern'],
     createdAt: new Date().toISOString(),
   },
   {
@@ -44,7 +44,7 @@ export const DEFAULT_ROLES: RbacRole[] = [
     name: 'Logistics Manager',
     description: 'Depot-level operational oversight, vehicle readiness, driver dispatch compliance, and audit record analysis.',
     isSystem: false,
-    permissions: ['analytics', 'fleet', 'operations', 'history', 'bulk', 'qr'],
+    permissions: ['analytics', 'fleet', 'operations', 'history', 'qa_pattern', 'bulk', 'qr'],
     createdAt: new Date().toISOString(),
   },
   {
@@ -52,7 +52,7 @@ export const DEFAULT_ROLES: RbacRole[] = [
     name: 'Feeder Admin',
     description: 'Heavy feeder / long-haul APAD compliance tracking, line-haul route status, and QR badge verification.',
     isSystem: false,
-    permissions: ['fleet', 'operations', 'history', 'qr'],
+    permissions: ['fleet', 'operations', 'history', 'qa_pattern', 'qr'],
     createdAt: new Date().toISOString(),
   },
 ];

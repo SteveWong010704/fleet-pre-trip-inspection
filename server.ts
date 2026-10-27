@@ -7,6 +7,7 @@ import { createServer as createViteServer } from 'vite';
 import {
   initStore,
   saveStore,
+  saveStoreSync,
   getVehicles,
   getVehicleByPlate,
   updateVehicle,
@@ -50,6 +51,10 @@ import {
   getDatabaseStatus,
   getExecutiveAnalytics,
   seedHistoricalInspections,
+  updateInspectionPhotoQa,
+  getDriverQaPatternReport,
+  getUninspectedDriversReport,
+  seedSampleDriverQaAudits,
   getRegions,
   createRegion,
   updateRegion,
@@ -366,7 +371,7 @@ async function startServer() {
   initBackupService();
 
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  const PORT = 3000;
 
   // Security hardening: hide Express identity
   app.disable('x-powered-by');
@@ -1418,6 +1423,82 @@ async function startServer() {
     }
   });
 
+  // Update photo QA audit decision (Admin only)
+  app.put('/api/inspections/:id/photo-qa', requireAdmin, (req, res) => {
+    try {
+      const { id } = req.params;
+      const { photoUrlOrSlot, photoQuality, accuracyType, adminNote, auditedBy } = req.body;
+      if (!photoUrlOrSlot || !photoQuality || !accuracyType) {
+        return res.status(400).json({
+          success: false,
+          error: 'photoUrlOrSlot, photoQuality, and accuracyType are required fields.',
+        });
+      }
+
+      const updated = updateInspectionPhotoQa(id, photoUrlOrSlot, {
+        photoQuality,
+        accuracyType,
+        adminNote,
+        auditedBy: auditedBy || (req as any).user?.name || (req as any).user?.username || 'Admin',
+        auditedAt: new Date().toISOString(),
+      });
+
+      if (!updated) {
+        return res.status(404).json({ success: false, error: `Inspection ${id} not found.` });
+      }
+
+      res.json({ success: true, inspection: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Get Driver QA & Mistake Pattern Report (Grouped by Depot and Driver)
+  app.get('/api/admin/driver-qa-patterns', requireAdmin, (req, res) => {
+    try {
+      const { dateFrom, dateTo, depot, driverId } = req.query;
+      const report = getDriverQaPatternReport({
+        dateFrom: dateFrom as string,
+        dateTo: dateTo as string,
+        depot: depot as string,
+        driverId: driverId as string,
+      });
+      res.json({ success: true, report });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Get Uninspected Drivers Audit Compliance Report (filter date, date range, depot, sort, and search)
+  app.get('/api/admin/uninspected-drivers', requireAdmin, (req, res) => {
+    try {
+      const { date, dateFrom, dateTo, depot, search, designation, sortBy, sortOrder } = req.query;
+      const report = getUninspectedDriversReport({
+        date: date as string,
+        dateFrom: dateFrom as string,
+        dateTo: dateTo as string,
+        depot: depot as string,
+        search: search as string,
+        designation: designation as string,
+        sortBy: sortBy as any,
+        sortOrder: sortOrder as any,
+      });
+      res.json({ success: true, ...report });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Seed sample QA Audits for testing pattern analytics
+  app.post('/api/admin/driver-qa-seed', requireAdmin, (req, res) => {
+    try {
+      const result = seedSampleDriverQaAudits();
+      res.json({ success: true, message: 'Sample driver QA audits successfully populated.', ...result });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Clear all inspections (Admin & Master Password protected)
   app.delete('/api/inspections', requireAdmin, requireSecurityPassword, (req, res) => {
     try {
@@ -1869,11 +1950,23 @@ async function startServer() {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        allowedHosts: true,
       },
       appType: 'spa',
     });
     app.use(vite.middlewares);
+    app.use('*', async (req, res, next) => {
+      if (req.originalUrl.startsWith('/api')) {
+        return next();
+      }
+      try {
+        let template = fs.readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(req.originalUrl, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e) {
+        if (vite) vite.ssrFixStacktrace(e as Error);
+        next(e);
+      }
+    });
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
@@ -1887,9 +1980,9 @@ async function startServer() {
   });
 
   const gracefulShutdown = (signal: string) => {
-    console.log(`[Server] ${signal} received. Flushing data store to disk and shutting down gracefully...`);
+    console.log(`[Server] ${signal} received. Synchronously flushing data store to disk and shutting down gracefully...`);
     try {
-      saveStore(true);
+      saveStoreSync();
     } catch (saveErr) {
       console.error('[Server Shutdown Flush Error]', saveErr);
     }
@@ -1901,6 +1994,11 @@ async function startServer() {
 
   process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('beforeExit', () => {
+    try {
+      saveStoreSync();
+    } catch {}
+  });
 }
 
 startServer().catch(err => {

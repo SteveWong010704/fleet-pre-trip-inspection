@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Vehicle } from '../../types';
-import { fetchVehicles } from '../../lib/api';
+import { fetchVehicles, fetchDepots } from '../../lib/api';
 import {
   QrCode,
   Printer,
@@ -32,6 +32,7 @@ import { SecurityPasswordModal } from '../SecurityPasswordModal';
 
 export const QrCodeGenerator: React.FC = () => {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [masterDepotCodes, setMasterDepotCodes] = useState<string[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
   // Filters
@@ -72,6 +73,17 @@ export const QrCodeGenerator: React.FC = () => {
     loadVehicles();
   }, [selectedBranch, selectedStatus]);
 
+  useEffect(() => {
+    fetchDepots()
+      .then(depots => {
+        const codes = (depots || [])
+          .map(depot => String(depot.code || depot.id || '').trim().toUpperCase())
+          .filter(Boolean);
+        setMasterDepotCodes(Array.from(new Set(codes)).sort());
+      })
+      .catch(err => console.warn('Could not load master depots for QR filter:', err));
+  }, []);
+
   const loadVehicles = async () => {
     setLoading(true);
     try {
@@ -87,14 +99,16 @@ export const QrCodeGenerator: React.FC = () => {
     }
   };
 
-  // Derive unique filter options
+  // Always include configured depots, even when a depot currently has no vehicles.
   const availableBranches = useMemo(() => {
-    const set = new Set<string>();
+    const configured = new Set<string>(masterDepotCodes);
+    if (configured.size > 0) return Array.from(configured).sort();
+    const fallback = new Set<string>();
     vehicles.forEach(v => {
-      if (v.branch) set.add(v.branch);
+      if (v.branch) fallback.add(v.branch.trim().toUpperCase());
     });
-    return Array.from(set).sort();
-  }, [vehicles]);
+    return Array.from(fallback).sort();
+  }, [masterDepotCodes, vehicles]);
 
   const availableBrands = useMemo(() => {
     const set = new Set<string>();
