@@ -7,6 +7,7 @@ import { createServer as createViteServer } from 'vite';
 import {
   initStore,
   saveStore,
+  saveStoreSync,
   getVehicles,
   getVehicleByPlate,
   updateVehicle,
@@ -52,6 +53,7 @@ import {
   seedHistoricalInspections,
   updateInspectionPhotoQa,
   getDriverQaPatternReport,
+  getUninspectedDriversReport,
   seedSampleDriverQaAudits,
   getRegions,
   createRegion,
@@ -1467,6 +1469,26 @@ async function startServer() {
     }
   });
 
+  // Get Uninspected Drivers Audit Compliance Report (filter date, date range, depot, sort, and search)
+  app.get('/api/admin/uninspected-drivers', requireAdmin, (req, res) => {
+    try {
+      const { date, dateFrom, dateTo, depot, search, designation, sortBy, sortOrder } = req.query;
+      const report = getUninspectedDriversReport({
+        date: date as string,
+        dateFrom: dateFrom as string,
+        dateTo: dateTo as string,
+        depot: depot as string,
+        search: search as string,
+        designation: designation as string,
+        sortBy: sortBy as any,
+        sortOrder: sortOrder as any,
+      });
+      res.json({ success: true, ...report });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Seed sample QA Audits for testing pattern analytics
   app.post('/api/admin/driver-qa-seed', requireAdmin, (req, res) => {
     try {
@@ -1958,9 +1980,9 @@ async function startServer() {
   });
 
   const gracefulShutdown = (signal: string) => {
-    console.log(`[Server] ${signal} received. Flushing data store to disk and shutting down gracefully...`);
+    console.log(`[Server] ${signal} received. Synchronously flushing data store to disk and shutting down gracefully...`);
     try {
-      saveStore(true);
+      saveStoreSync();
     } catch (saveErr) {
       console.error('[Server Shutdown Flush Error]', saveErr);
     }
@@ -1972,6 +1994,11 @@ async function startServer() {
 
   process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('beforeExit', () => {
+    try {
+      saveStoreSync();
+    } catch {}
+  });
 }
 
 startServer().catch(err => {
