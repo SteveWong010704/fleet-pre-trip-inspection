@@ -745,3 +745,55 @@ export interface DriverQaReportResult {
     dateTo: string;
   };
 }
+
+export interface UninspectedDriverItem {
+  employeeId: string;
+  loginId: string;
+  name: string;
+  depot: string;
+  depotName: string;
+  designation: string;
+  phone: string;
+  status: 'A' | 'I';
+  avatarUrl?: string;
+  totalDays: number;
+  missedCount: number;
+  inspectedCount: number;
+  missedDates: string[];
+  inspectedDates: string[];
+  complianceRate: number;
+  complianceStatus: 'Non-Compliant' | 'Partially Compliant' | 'Fully Compliant';
+  latestInspectionDate?: string;
+  assignedRoute?: string;
+  assignedVehicle?: string;
+}
+
+export interface UninspectedDriversReportResult {
+  summary: {
+    totalActiveDrivers: number;
+    uninspectedDriversCount: number;
+    fullyCompliantCount: number;
+    overallComplianceRate: number;
+    dateFrom: string;
+    dateTo: string;
+    depot: string;
+    totalDays: number;
+  };
+  drivers: UninspectedDriverItem[];
+  dailyRoster: {
+    date: string;
+    formattedDate: string;
+    dayOfWeek: string;
+    totalDrivers: number;
+    uninspectedCount: number;
+    compliantCount: number;
+    missingDrivers: {
+      employeeId: string;
+      loginId: string;
+      name: string;
+      depot: string;
+      designation: string;
+      phone: string;
+    }[];
+  }[];
+}
