@@ -409,7 +409,7 @@ export function performDailyBackup(reason: string = 'scheduled'): {
                   driverName: insp.driverName,
                   driverId: insp.driverId,
                   inspectionId: insp.id,
-                  itemId: photo.itemId || '',
+                  itemId: photo.itemId,
                   itemTitle: photo.itemTitle || title,
                   caption: photo.caption,
                   timestamp: photo.timestamp || insp.timestamp,
