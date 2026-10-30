@@ -43,7 +43,7 @@ let lastBackupSizeKb: number = 0;
 let totalBackupsRun: number = 0;
 let debounceTimer: NodeJS.Timeout | null = null;
 let cachedBackupStatus: { status: BackupStatus; timestamp: number } | null = null;
-const BACKUP_STATUS_CACHE_TTL_MS = 5000; // 5 seconds cache
+const BACKUP_STATUS_CACHE_TTL_MS = 30000; // 30 seconds; status is metadata and should not trigger repeated disk scans
 
 export function invalidateBackupStatusCache() {
   cachedBackupStatus = null;
@@ -553,7 +553,25 @@ export function performDailyBackup(reason: string = 'scheduled'): {
 
     const retainedDays = dayFolders.filter((f) => !purgedDays.includes(f));
     lastBackupTime = new Date().toISOString();
-    lastBackupSizeKb = Math.round(getDirectorySizeBytes(rootDir) / 1024);
+    // Avoid recursively scanning the entire backup tree after every run. Each daily
+    // manifest already stores its folder size; add top-level ZIP sizes with one stat
+    // per archive instead of walking every photo and snapshot again.
+    let totalBackupBytes = 0;
+    for (const folderName of retainedDays) {
+      const folderPath = path.join(rootDir, folderName);
+      const manifestPath = path.join(folderPath, 'manifest.json');
+      try {
+        if (fs.existsSync(manifestPath)) {
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+          totalBackupBytes += Math.max(0, Number(manifest.folderSizeKb) || 0) * 1024;
+        }
+      } catch {}
+      const zipPath = path.join(rootDir, `${folderName}.zip`);
+      try {
+        if (fs.existsSync(zipPath)) totalBackupBytes += fs.statSync(zipPath).size;
+      } catch {}
+    }
+    lastBackupSizeKb = Math.round(totalBackupBytes / 1024);
     totalBackupsRun += 1;
 
     logger.info(
@@ -661,7 +679,23 @@ export function getBackupStatus(): BackupStatus {
           }
         }
 
-        const folderSizeBytes = getDirectorySizeBytes(folderPath);
+        // Prefer the size recorded when the backup was created. Recursively walking
+        // every photo and snapshot here made this status API extremely expensive.
+        // Only legacy folders without a usable manifest use the slower fallback.
+        let folderSizeKb = 0;
+        let hasValidManifestSize = false;
+        if (fs.existsSync(manifestPath)) {
+          try {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+            if (Number.isFinite(Number(manifest.folderSizeKb)) && Number(manifest.folderSizeKb) >= 0) {
+              folderSizeKb = Number(manifest.folderSizeKb);
+              hasValidManifestSize = true;
+            }
+          } catch {}
+        }
+        if (!hasValidManifestSize) {
+          folderSizeKb = Math.round(getDirectorySizeBytes(folderPath) / 1024);
+        }
 
         existingDays.push({
           date: dateStr,
@@ -670,7 +704,7 @@ export function getBackupStatus(): BackupStatus {
           inspectionsCount,
           auditLogsCount,
           photosCount,
-          totalSizeKb: Math.round(folderSizeBytes / 1024),
+          totalSizeKb: folderSizeKb,
           hasZip,
           zipPath: hasZip ? zipPath : undefined,
           lastUpdated: lastUpdated || new Date().toISOString(),
