@@ -51,7 +51,7 @@ export function invalidateBackupStatusCache() {
 
 /**
  * Determines backup root directory:
- * Prefers C:\FleetInspection_Backup on Windows, with fallback to ./backups on non-Windows/containers.
+ * Prefers D:\FleetInspection_Backup on Windows, with fallback to ./backups on non-Windows/containers.
  * Can be overridden with process.env.BACKUP_DIR
  */
 export function getBackupRootDir(): string {
@@ -65,10 +65,10 @@ export function getBackupRootDir(): string {
     return custom;
   }
 
-  // Test if Windows C:\ is available and writable
-  if (process.platform === 'win32' || fs.existsSync('C:\\')) {
+  // Test if Windows D:\ is available and writable
+  if (process.platform === 'win32' || fs.existsSync('D:\\')) {
     try {
-      const winDir = 'C:\\FleetInspection_Backup';
+      const winDir = 'D:\\FleetInspection_Backup';
       if (!fs.existsSync(winDir)) {
         fs.mkdirSync(winDir, { recursive: true });
       }
@@ -942,7 +942,7 @@ export async function restoreFromBackupZip(zipBuffer: Buffer, originalFilename?:
   const { mergeRestoredInspections } = await import('./storage');
   const mergeResult = mergeRestoredInspections(inspectionsList);
 
-  // 4. Also preserve the restored backup folder in C:\FleetInspection_Backup
+  // 4. Also preserve the restored backup folder in D:\FleetInspection_Backup
   if (backupDate) {
     try {
       const targetFolder = path.join(rootDir, `backup_${backupDate}`);

@@ -93,8 +93,8 @@ export interface ExecutiveAnalyticsResult {
 
 /** 
  * Return the calendar date in Malaysia (UTC+08:00), strictly aligned with Inspection Audit (InspectionHistory.tsx).
- * 1. Checks formattedDate first (as displayed in Inspection Audit, e.g. "22/10/2026, 08:30:00" -> "2026-10-22").
- * 2. Checks timestamp / Timestamp, recognizing local Malaysia strings or converting UTC ISO with Asia/Kuala_Lumpur.
+ * 1. Checks formattedDate first. Production records use en-GB (DD/MM/YYYY).
+ * 2. Checks timestamp / Timestamp as a fallback, converting offset-aware values to Asia/Kuala_Lumpur.
  * 3. Falls back to certificate ID (INSP-YYYYMMDD-XXXX).
  */
 export function getInspectionDateKey(inspection: InspectionRecord | any): string {
@@ -103,9 +103,10 @@ export function getInspectionDateKey(inspection: InspectionRecord | any): string
   // 1. Follow Inspection Audit Date & Time (formattedDate)
   const formatted = String(inspection.formattedDate || inspection.FormattedDate || '').trim();
   if (formatted) {
-    // DB FormattedDate is commonly produced with en-US toLocaleString():
-    // "10/20/2026, 18:02:33" = MM/DD/YYYY, HH:mm:ss.
-    // Support both en-US and Malaysian DD/MM/YYYY safely (never rely on Date.parse).
+    // Production FormattedDate is generated with en-GB in storage.ts:
+    // "02/11/2026, 08:30:00" = DD/MM/YYYY, HH:mm:ss.
+    // Inspection Audit and storage date helpers also interpret this as DD/MM/YYYY.
+    // Never use Date.parse for slash-formatted dates.
     const slashDate = formatted.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
     if (slashDate) {
       const first = Number(slashDate[1]);
@@ -114,7 +115,7 @@ export function getInspectionDateKey(inspection: InspectionRecord | any): string
       let day: number;
       if (first > 12 && second <= 12) { day = first; month = second; } // DD/MM/YYYY
       else if (second > 12 && first <= 12) { month = first; day = second; } // MM/DD/YYYY
-      else { month = first; day = second; } // Ambiguous values default to DB's en-US format
+      else { day = first; month = second; } // Ambiguous values follow production en-GB (DD/MM/YYYY)
       const year = Number(slashDate[3]);
       const check = new Date(Date.UTC(year, month - 1, day));
       if (month >= 1 && month <= 12 && day >= 1 && check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day) {
