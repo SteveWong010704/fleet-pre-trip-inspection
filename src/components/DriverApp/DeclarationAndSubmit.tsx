@@ -68,7 +68,7 @@
       e.preventDefault();
       setSubmitError('');
 
-      // ENFORCE: Mandatory Photos according to checkpoint requirements (Feeder: 15 photos daily, Sales truck: Mon-Fri 6 photos, Sat 15 photos)
+      // ENFORCE: Mandatory Photos according to checkpoint requirements (Feeder: 15 photos on weekdays / 16 on Saturday, Sales truck: Mon-Fri 6 photos / Saturday 16 photos)
       const isSat = isSaturdayInspection();
       const isFullAudit = requiresFull15PhotoInspection(vehicle, isSat);
       for (const item of items) {

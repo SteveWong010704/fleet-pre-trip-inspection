@@ -70,6 +70,18 @@ export const CHECKPOINT_PHOTO_CONFIG: Record<string, CheckpointRequirement> = {
       { index: 0, name: 'Power Steering Fluid', shortLabel: 'Steering Fluid', description: 'Power Steering Fluid Reservoir & Level' },
     ],
   },
+  puspakum_roadtax: {
+    id: 'puspakum_roadtax',
+    minPhotos: 1,
+    slots: [
+      {
+        index: 0,
+        name: 'PUSPAKOM & Road Tax',
+        shortLabel: 'PUSPAKOM + Roadtax',
+        description: 'One photo showing both the valid PUSPAKOM inspection disc and Road Tax clearly',
+      },
+    ],
+  },
   fluids_powertrain: {
     id: 'fluids_powertrain',
     minPhotos: 1,

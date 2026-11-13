@@ -121,7 +121,7 @@ export default function App() {
   const [photoAlertMessage, setPhotoAlertMessage] = useState<string>('');
 
   const handleProceedToDeclaration = () => {
-    // Check if every checkpoint has satisfied its photo requirement (Feeder: 15 photos daily, Sales truck: Mon-Fri 6 photos, Sat 15 photos)
+    // Check if every checkpoint has satisfied its photo requirement (Feeder: 15 photos on weekdays / 16 on Saturday, Sales truck: Mon-Fri 6 photos / Saturday 16 photos)
     const isFullAudit = requiresFull15PhotoInspection(selectedVehicle);
     for (const item of checklistItems) {
       const required = getCheckpointRequiredPhotoCount(item.id, isFullAudit);

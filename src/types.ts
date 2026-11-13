@@ -421,6 +421,13 @@ export const SATURDAY_FULL_ITEMS: Omit<InspectionCheckItem, 'status' | 'defectNo
       oilLightOff: true,
     },
   },
+  {
+    id: 'puspakum_roadtax',
+    code: 11,
+    category: 'Vehicle Documents',
+    title: 'PUSPAKOM & Road Tax (1 Combined Photo)',
+    subtext: 'MANDATORY: Take ONE photo showing both the valid PUSPAKOM inspection disc and Road Tax together. Ensure both documents are clearly visible and readable.',
+  },
 ];
 
 export function isSaturdayInspection(): boolean {
@@ -465,6 +472,9 @@ export function getActiveInspectionItems(
   isSaturday: boolean = isSaturdayInspection()
 ): Omit<InspectionCheckItem, 'status' | 'defectNote' | 'photoUrl'>[] {
   const isFullSet = requiresFull15PhotoInspection(target, isSaturday);
+  // The PUSPAKOM + Road Tax checkpoint is Saturday-only, including for Feeder vehicles.
+  // Feeder vehicles keep their existing full inspection on weekdays without this extra checkpoint.
+  if (isSaturday) return SATURDAY_FULL_ITEMS;
   return isFullSet ? SATURDAY_FULL_ITEMS : WEEKDAY_6_POINT_ITEMS;
 }
 
