@@ -569,7 +569,7 @@ export const Checklist10Points: React.FC<Props> = ({
         <div className="flex items-center justify-between text-[10px] font-mono font-bold px-1">
           <span className={isFullAudit ? 'text-amber-700 font-semibold' : 'text-slate-500'}>
             {isFullAudit
-              ? (isFeeder ? '🚚 Feeder Daily Audit (Full Set • 15 Photos)' : '⚡ Saturday Deep Audit (Full Set • 15 Photos)')
+              ? (isSaturday ? '⚡ Saturday Deep Audit (Full Set • 16 Photos)' : '🚚 Feeder Daily Audit (Full Set • 15 Photos)')
               : '🚐 Sales Truck Routine (5 Points • 6 Photos • Meter Last)'}
           </span>
           <span className="text-slate-400">
