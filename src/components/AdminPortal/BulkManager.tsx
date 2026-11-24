@@ -5,7 +5,6 @@ import { Vehicle, Driver } from '../../types';
 import { Upload, Download, FileText, CheckCircle2, AlertTriangle, RefreshCw, Truck, Users, QrCode, ArrowRight, Printer, Trash2, ShieldAlert, Sparkles, X, Lock, Eye, EyeOff } from 'lucide-react';
 import QRCodeLib from 'qrcode';
 import { buildVehicleDeepLink } from '../../lib/publicUrl';
-import { MASTER_SECURITY_PASSWORD } from '../SecurityPasswordModal';
 
 export const BulkManager: React.FC = () => {
   const [activeType, setActiveType] = useState<'vehicles' | 'drivers'>('vehicles');
@@ -137,11 +136,6 @@ export const BulkManager: React.FC = () => {
   const handleExecuteWipe = async () => {
     if (!wipePassword.trim()) {
       setWipePasswordError('Master security password is required to authorize wipe.');
-      return;
-    }
-
-    if (wipePassword !== MASTER_SECURITY_PASSWORD) {
-      setWipePasswordError('Incorrect security password. Wipe authorization denied.');
       return;
     }
 

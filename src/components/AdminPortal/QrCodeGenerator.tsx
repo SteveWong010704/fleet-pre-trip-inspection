@@ -213,7 +213,7 @@ export const QrCodeGenerator: React.FC = () => {
     onConfirm: () => {},
   });
 
-  // Save public URL (Requires master security password MightY99/.1234)
+  // Save public URL (Requires the master security password)
   const handleRequestSavePublicUrl = () => {
     const trimmed = publicUrlInput.trim();
     setSecurityModalConfig({
@@ -234,7 +234,7 @@ export const QrCodeGenerator: React.FC = () => {
     });
   };
 
-  // Reset public URL (Requires master security password MightY99/.1234)
+  // Reset public URL (Requires the master security password)
   const handleRequestResetToOrigin = () => {
     const origin = window.location.origin;
     setSecurityModalConfig({

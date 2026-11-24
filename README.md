@@ -27,7 +27,7 @@ Enterprise mobile-first pre-trip vehicle inspection, driver authorization, QR sc
    MSSQL_SERVER=192.168.1.215
    MSSQL_PORT=1433
    MSSQL_USER=sa
-   MSSQL_PASSWORD=StrongPassword123
+   MSSQL_PASSWORD=<your-sql-password>
    MSSQL_DATABASE=FleetInspectionDB
    ```
 
