@@ -113,6 +113,7 @@ import {
 import { registerOperationsRoutes } from './server/routes/operations';
 import { registerRbacRoutes } from './server/routes/rbac';
 import { registerBackupRoutes } from './server/routes/backup';
+import { getClientVersion } from './server/http/version';
 import { registerVehicleRoutes } from './server/routes/vehicles';
 import { registerDriverRoutes } from './server/routes/drivers';
 import { registerInspectionRoutes } from './server/routes/inspections';
@@ -460,6 +461,11 @@ async function startServer() {
   // --- API Endpoints ---
 
   // Health & Telemetry check endpoint
+  // Build id of the deployed web app, so open browser tabs can notice a new deploy
+  app.get('/api/version', (req, res) => {
+    res.json({ version: getClientVersion() });
+  });
+
   app.get('/api/health', (req, res) => {
     const mem = process.memoryUsage();
     res.json({
@@ -873,8 +879,16 @@ async function startServer() {
     });
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(
+      express.static(distPath, {
+        setHeaders: (res, filePath) => {
+          // index.html must always be revalidated so a new deploy is picked up
+          if (filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache');
+        },
+      })
+    );
     app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

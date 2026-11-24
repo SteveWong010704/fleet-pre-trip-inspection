@@ -156,3 +156,10 @@ test('destructive endpoints require the master password', async () => {
   const ok = await api(srv.base, 'DELETE', '/api/inspections', { token: adminToken, headers: { 'x-security-password': MASTER_PASS } });
   assert.equal(ok.status, 200);
 });
+
+test('/api/version is public and returns a version string', async () => {
+  const r = await api(srv.base, 'GET', '/api/version');
+  assert.equal(r.status, 200);
+  assert.equal(typeof r.json.version, 'string');
+  assert.ok(r.json.version.length > 0);
+});
