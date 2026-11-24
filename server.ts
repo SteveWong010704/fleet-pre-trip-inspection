@@ -117,10 +117,7 @@ function createRateLimiter(windowMs: number, maxRequests: number, message: strin
   if (cleanupTimer.unref) cleanupTimer.unref();
 
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
-      req.socket.remoteAddress ||
-      'unknown';
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
     let entry = ipMap.get(ip);
 
@@ -263,11 +260,17 @@ function getBearerToken(req: express.Request): string | null {
   if (customHeader && typeof customHeader === 'string') {
     return customHeader.trim();
   }
-  if (req.query?.authToken && typeof req.query.authToken === 'string') {
-    return req.query.authToken.trim();
-  }
-  if (req.query?.token && typeof req.query.token === 'string' && req.query.token.includes('.')) {
-    return req.query.token.trim();
+  // Query-string tokens end up in logs and browser history, so they are only accepted
+  // for plain <a href> file downloads, which cannot send an Authorization header.
+  const isDownloadLink =
+    req.method === 'GET' && /^\/api\/backup\/(download|file)\//.test(req.originalUrl || req.url || '');
+  if (isDownloadLink) {
+    if (req.query?.authToken && typeof req.query.authToken === 'string') {
+      return req.query.authToken.trim();
+    }
+    if (req.query?.token && typeof req.query.token === 'string' && req.query.token.includes('.')) {
+      return req.query.token.trim();
+    }
   }
   return null;
 }
@@ -371,19 +374,17 @@ async function startServer() {
   initBackupService();
 
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // Security hardening: hide Express identity
   app.disable('x-powered-by');
-  app.set('trust proxy', true);
+  // Only trust X-Forwarded-For from a local reverse proxy / tunnel (e.g. ngrok); LAN clients cannot spoof it
+  app.set('trust proxy', 'loopback');
 
   // Request logger middleware: logs every HTTP request with response time, IP, and status
   app.use((req, res, next) => {
     const start = Date.now();
-    const clientIp =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
-      req.socket.remoteAddress ||
-      'unknown';
+    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
 
     res.on('finish', () => {
       const duration = Date.now() - start;
@@ -407,6 +408,11 @@ async function startServer() {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-XSS-Protection', '1; mode=block');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Permissions-Policy', 'camera=(self), geolocation=(self), microphone=()');
+    if (req.url.startsWith('/api/')) {
+      res.setHeader('Cache-Control', 'no-store');
+    }
     next();
   });
 
@@ -417,8 +423,19 @@ async function startServer() {
   }
 
   // JSON & URL-encoded payload parsers for base64 camera image uploads
-  app.use(express.json({ limit: '100mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+  // Large limit only where base64 photos / bulk imports are expected; tiny for unauthenticated login.
+  const jsonTiny = express.json({ limit: '100kb' });
+  const jsonDefault = express.json({ limit: '10mb' });
+  const jsonLarge = express.json({ limit: '100mb' });
+  const LARGE_BODY_PATHS = /^\/api\/(inspections|upload-photo|vehicles\/bulk|drivers\/bulk|backup\/restore)(\/|\?|$)/;
+  const LOGIN_PATHS = /^\/api\/(admin|drivers)\/login(\?|$)/;
+  app.use((req, res, next) => {
+    const url = req.url;
+    if (LOGIN_PATHS.test(url)) return jsonTiny(req, res, next);
+    if (LARGE_BODY_PATHS.test(url)) return jsonLarge(req, res, next);
+    return jsonDefault(req, res, next);
+  });
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // Raw binary body parser for direct backup ZIP archive uploads (up to 300MB)
   app.use(
@@ -467,6 +484,10 @@ async function startServer() {
       const decodedPath = decodeURIComponent(req.path).replace(/\\/g, '/').replace(/^\/+/, '');
       if (!decodedPath || !/\.(jpe?g|png|webp|gif|svg)$/i.test(decodedPath)) {
         return next();
+      }
+      // Reject path traversal attempts outright
+      if (decodedPath.split('/').some((seg) => seg === '..' || seg === '.') || decodedPath.includes('\0')) {
+        return res.status(400).end();
       }
 
       // 1. Direct check in uploadsDir (handles potential Windows/Linux path separator issues)
@@ -668,12 +689,12 @@ async function startServer() {
   });
 
   // Database Connection Status (MSSQL SSMS vs JSON)
-  app.get('/api/database/status', (req, res) => {
+  app.get('/api/database/status', requireAdmin, (req, res) => {
     res.json(getDatabaseStatus());
   });
 
   // System Logs Viewer endpoint (in-memory circular buffer with level filtering)
-  app.get('/api/system/logs', (req, res) => {
+  app.get('/api/system/logs', requireAdmin, (req, res) => {
     try {
       const limit = parseInt(req.query.limit as string) || 150;
       const level = req.query.level as any;
@@ -686,7 +707,7 @@ async function startServer() {
   });
 
   // System Logs File Download endpoint (foms.log or error.log)
-  app.get('/api/system/logs/download', (req, res) => {
+  app.get('/api/system/logs/download', requireAdmin, (req, res) => {
     try {
       const type = (req.query.type === 'error' ? 'error' : 'app') as 'app' | 'error';
       const filePath = logger.getLogFilePath(type);
@@ -753,7 +774,7 @@ async function startServer() {
   });
 
   // Fleet overview statistics with real-time completion filtering
-  app.get('/api/stats', (req, res) => {
+  app.get('/api/stats', requireAuth, (req, res) => {
     try {
       const { branch, date, route, category, truckCategory, tonnage } = req.query;
       const stats = getFleetStats({
@@ -770,7 +791,7 @@ async function startServer() {
   });
 
   // Executive Compliance & Fleet Analytics
-  app.get('/api/analytics', (req, res) => {
+  app.get('/api/analytics', requireAdmin, (req, res) => {
     try {
       const { timeframe, branch, truckCategory, dateFrom, dateTo } = req.query;
       const analytics = getExecutiveAnalytics({
@@ -787,7 +808,7 @@ async function startServer() {
   });
 
   // Seed / Refresh demo historical inspection records for executive analytics
-  app.post('/api/analytics/seed-demo', (req, res) => {
+  app.post('/api/analytics/seed-demo', requireAdmin, (req, res) => {
     try {
       const daysBack = Number(req.body?.daysBack) || 30;
       const result = seedHistoricalInspections(daysBack);
@@ -798,7 +819,7 @@ async function startServer() {
   });
 
   // ----------------- OPERATIONS HIERARCHY API (REGIONS, DEPOTS, ROUTES) -----------------
-  app.get('/api/operations/regions', (req, res) => {
+  app.get('/api/operations/regions', requireAuth, (req, res) => {
     try {
       res.json({ success: true, data: getRegions() });
     } catch (err: any) {
@@ -833,7 +854,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/operations/depots', (req, res) => {
+  app.get('/api/operations/depots', requireAuth, (req, res) => {
     try {
       res.json({ success: true, data: getDepots() });
     } catch (err: any) {
@@ -868,7 +889,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/operations/routes', (req, res) => {
+  app.get('/api/operations/routes', requireAuth, (req, res) => {
     try {
       res.json({ success: true, data: getRoutes() });
     } catch (err: any) {
@@ -1550,7 +1571,7 @@ async function startServer() {
   });
 
   // Get demo seed data status
-  app.get('/api/storage/demo-status', (req, res) => {
+  app.get('/api/storage/demo-status', requireAdmin, (req, res) => {
     try {
       const status = getDemoStatus();
       res.json({ success: true, ...status });

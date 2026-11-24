@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AuditLog } from '../../types';
-import { fetchAuditLogs } from '../../lib/api';
+import { fetchAuditLogs, authFetch } from '../../lib/api';
 import {
   Server,
   Database,
@@ -70,7 +70,7 @@ export const AuditLogViewer: React.FC = () => {
   const loadSystemLogs = async () => {
     setSystemLoading(true);
     try {
-      const res = await fetch('/api/system/logs?limit=200');
+      const res = await authFetch('/api/system/logs?limit=200');
       const data = await res.json();
       if (data.success && Array.isArray(data.logs)) {
         setSystemLogs(data.logs);
@@ -79,6 +79,25 @@ export const AuditLogViewer: React.FC = () => {
       console.error('Failed to load system logs:', err);
     } finally {
       setSystemLoading(false);
+    }
+  };
+
+  // The log file endpoint requires the admin token, which a plain <a href> cannot send
+  const downloadSystemLog = async () => {
+    try {
+      const res = await authFetch('/api/system/logs/download?type=app');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `foms_app_${new Date().toISOString().slice(0, 10)}.log`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to download system log:', err);
     }
   };
 
@@ -297,15 +316,15 @@ export const AuditLogViewer: React.FC = () => {
               </>
             ) : (
               <div className="flex items-center space-x-2">
-                <a
-                  href="/api/system/logs/download?type=app"
-                  download
+                <button
+                  type="button"
+                  onClick={downloadSystemLog}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
                   title="Download foms.log file"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Download foms.log</span>
-                </a>
+                </button>
                 <button
                   type="button"
                   onClick={loadSystemLogs}
