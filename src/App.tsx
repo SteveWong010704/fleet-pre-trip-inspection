@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useVersionCheck } from './lib/useVersionCheck';
 import { Driver, Vehicle, InspectionCheckItem, InspectionPhoto, InspectionRecord, STANDARD_10_POINT_ITEMS, getActiveInspectionItems, isSaturdayInspection, requiresFull15PhotoInspection, AdminUser } from './types';
 import { Navbar } from './components/Navbar';
 import { DriverAuth } from './components/DriverApp/DriverAuth';
@@ -91,6 +92,12 @@ export default function App() {
   const [activeDriver, setActiveDriver] = useState<Driver | null>(null);
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
   const [driverStep, setDriverStep] = useState<'auth' | 'scanner' | 'checklist' | 'declaration' | 'certificate'>('auth');
+
+  // A new deploy is picked up automatically, but only when a driver is not mid-inspection
+  // (login / QR scan screens). Everywhere else a banner offers a manual refresh instead.
+  const { updateAvailable, reload: reloadForUpdate } = useVersionCheck(
+    currentView === 'driver' && (driverStep === 'auth' || driverStep === 'scanner')
+  );
   
   // Checklist State helper to ensure systemChecks and dashboardChecks are initialized
   const createInitialChecklist = (veh?: Vehicle | null): InspectionCheckItem[] => {
@@ -268,6 +275,18 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans selection:bg-blue-500 selection:text-white w-full max-w-full overflow-x-hidden">
+      {updateAvailable && (
+        <div className="w-full bg-amber-500 text-white text-sm font-semibold px-4 py-2 flex items-center justify-between gap-3">
+          <span>A new version is available. Finish what you are doing, then refresh.</span>
+          <button
+            type="button"
+            onClick={reloadForUpdate}
+            className="shrink-0 rounded-md bg-white/20 px-3 py-1 font-bold hover:bg-white/30"
+          >
+            Refresh
+          </button>
+        </div>
+      )}
       {/* Header Bar */}
       <Navbar
         currentView={currentView}

@@ -472,8 +472,9 @@ export function getActiveInspectionItems(
   isSaturday: boolean = isSaturdayInspection()
 ): Omit<InspectionCheckItem, 'status' | 'defectNote' | 'photoUrl'>[] {
   const isFullSet = requiresFull15PhotoInspection(target, isSaturday);
-  // The PUSPAKOM + Road Tax checkpoint is Saturday-only, including for Feeder vehicles.
-  // Feeder vehicles keep their existing full inspection on weekdays without this extra checkpoint.
+  // Saturday: everyone gets the full 11-checkpoint set (incl. PUSPAKOM + Road Tax).
+  // Feeder vehicles also use the full 11-checkpoint set on weekdays (confirmed rule).
+  // Small trucks use the 5-checkpoint routine Monday to Friday.
   if (isSaturday) return SATURDAY_FULL_ITEMS;
   return isFullSet ? SATURDAY_FULL_ITEMS : WEEKDAY_6_POINT_ITEMS;
 }
