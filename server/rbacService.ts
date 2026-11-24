@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { RbacRole, RbacUser, ADMIN_FEATURES } from '../src/types';
+import { verifyPassword, hashPassword, passwordForStorage, isHashingEnabled } from './passwordHash';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const RBAC_FILE = path.join(DATA_DIR, 'rbac_store.json');
@@ -57,15 +58,34 @@ export const DEFAULT_ROLES: RbacRole[] = [
   },
 ];
 
-export const DEFAULT_GLOBAL_ADMIN: RbacUser = {
-  username: 'steve',
-  name: 'Steve Wong',
-  password: '2580Qwer!@#',
-  role: 'Global Admin',
-  assignedDepot: 'ALL',
-  active: true,
-  createdAt: new Date().toISOString(),
-};
+/**
+ * Password for the primary Global Admin ("steve") ONLY when that account has none yet
+ * (first run, or an empty store). Taken from ADMIN_PASSWORD in .env; if that is unset a
+ * random one is generated and printed once. It is never a hard-coded value.
+ */
+function getBootstrapAdminPassword(): string {
+  const fromEnv = (process.env.ADMIN_PASSWORD || '').trim();
+  if (fromEnv.length >= 8) return fromEnv;
+  const generated = crypto.randomBytes(12).toString('base64url');
+  console.warn('==================================================================');
+  console.warn('[RBAC] No ADMIN_PASSWORD set in .env. Generated a one-time password');
+  console.warn(`[RBAC] for admin user "steve": ${generated}`);
+  console.warn('[RBAC] Log in and change it in User Management & RBAC.');
+  console.warn('==================================================================');
+  return generated;
+}
+
+function buildDefaultGlobalAdmin(): RbacUser {
+  return {
+    username: 'steve',
+    name: 'Steve Wong',
+    password: getBootstrapAdminPassword(),
+    role: 'Global Admin',
+    assignedDepot: 'ALL',
+    active: true,
+    createdAt: new Date().toISOString(),
+  };
+}
 
 let rbacStore: RbacStoreState = {
   users: [],
@@ -135,18 +155,26 @@ export function initRbacStore() {
 
     // Ensure Steve Global Admin account always exists
     if (!rbacStore.users || rbacStore.users.length === 0) {
-      rbacStore.users = [{ ...DEFAULT_GLOBAL_ADMIN }];
+      rbacStore.users = [buildDefaultGlobalAdmin()];
     } else {
       const steve = rbacStore.users.find(u => u.username.toLowerCase() === 'steve');
       if (!steve) {
-        rbacStore.users.unshift({ ...DEFAULT_GLOBAL_ADMIN });
+        rbacStore.users.unshift(buildDefaultGlobalAdmin());
       } else {
         // Enforce Steve is always Global Admin, active, and has required credentials
         steve.role = 'Global Admin';
         steve.assignedDepot = 'ALL';
         steve.active = true;
         if (!steve.password) {
-          steve.password = DEFAULT_GLOBAL_ADMIN.password;
+          steve.password = getBootstrapAdminPassword();
+        } else if (
+          (process.env.RESET_ADMIN_PASSWORD || '').trim().toLowerCase() === 'true' &&
+          (process.env.ADMIN_PASSWORD || '').trim().length >= 8
+        ) {
+          // Recovery switch for someone with access to .env: set RESET_ADMIN_PASSWORD=true
+          // plus ADMIN_PASSWORD, restart once, then remove RESET_ADMIN_PASSWORD again.
+          steve.password = (process.env.ADMIN_PASSWORD || '').trim();
+          console.warn('[RBAC] Password of "steve" was reset from ADMIN_PASSWORD (RESET_ADMIN_PASSWORD=true). Remove that switch now.');
         }
       }
     }
@@ -255,13 +283,13 @@ export function getRbacUsers(): Omit<RbacUser, 'password'>[] {
   return rbacStore.users.map(({ password, ...rest }) => rest);
 }
 
-export function createRbacUser(data: {
+export async function createRbacUser(data: {
   username: string;
   name: string;
   password?: string;
   role: string;
   assignedDepot: string;
-}): RbacUser {
+}): Promise<RbacUser> {
   const cleanUsername = data.username.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
   if (!cleanUsername || cleanUsername.length < 2) {
     throw new Error('Username must be at least 2 alphanumeric characters');
@@ -289,7 +317,7 @@ export function createRbacUser(data: {
   const newUser: RbacUser = {
     username: cleanUsername,
     name: cleanName,
-    password: cleanPassword,
+    password: await passwordForStorage(cleanPassword),
     role: roleName,
     assignedDepot: (data.assignedDepot || 'ALL').trim().toUpperCase(),
     active: true,
@@ -303,7 +331,7 @@ export function createRbacUser(data: {
   return safeUser as RbacUser;
 }
 
-export function updateRbacUser(
+export async function updateRbacUser(
   username: string,
   updates: {
     name?: string;
@@ -312,7 +340,7 @@ export function updateRbacUser(
     assignedDepot?: string;
     active?: boolean;
   }
-): Omit<RbacUser, 'password'> {
+): Promise<Omit<RbacUser, 'password'>> {
   const cleanUsername = username.trim().toLowerCase();
   const user = rbacStore.users.find(u => u.username.toLowerCase() === cleanUsername);
   if (!user) {
@@ -324,7 +352,7 @@ export function updateRbacUser(
   }
 
   if (updates.password && updates.password.trim().length >= 4) {
-    user.password = updates.password.trim();
+    user.password = await passwordForStorage(updates.password.trim());
   }
 
   if (updates.role) {
@@ -367,10 +395,10 @@ export function deleteRbacUser(username: string): boolean {
 
 // ===================== AUTHENTICATION WITH RBAC RESOLUTION =====================
 
-export function verifyRbacLogin(
+export async function verifyRbacLogin(
   usernameAttempt: string,
   passwordAttempt: string
-): {
+): Promise<{
   success: boolean;
   admin?: {
     username: string;
@@ -380,31 +408,14 @@ export function verifyRbacLogin(
     permissions: string[];
   };
   message?: string;
-} {
+}> {
   const cleanUser = usernameAttempt.trim().toLowerCase();
   const cleanPass = passwordAttempt.trim();
 
   // Find user in RBAC store
   const user = rbacStore.users.find(u => u.username.toLowerCase() === cleanUser);
 
-  // Check custom admin password from env for steve or admin fallback if configured
-  const envPassword = (process.env.ADMIN_PASSWORD || '').trim();
-  const isEnvPassMatch = envPassword && cleanPass === envPassword;
-
   if (!user) {
-    // Special fallback for initial setup if steve wasn't loaded yet
-    if (cleanUser === 'steve' && (cleanPass === '2580Qwer!@#' || isEnvPassMatch)) {
-      return {
-        success: true,
-        admin: {
-          username: 'steve',
-          name: 'Steve Wong',
-          role: 'Global Admin',
-          assignedDepot: 'ALL',
-          permissions: [...ALL_FEATURE_IDS],
-        },
-      };
-    }
     return { success: false, message: 'Invalid admin username or password.' };
   }
 
@@ -412,10 +423,20 @@ export function verifyRbacLogin(
     return { success: false, message: 'This staff account has been deactivated. Please contact your Global Administrator.' };
   }
 
-  const isPasswordMatch = (user.password && user.password === cleanPass) || isEnvPassMatch || (cleanUser === 'steve' && cleanPass === '2580Qwer!@#');
-
-  if (!isPasswordMatch) {
+  // Stored value is a scrypt hash, or plaintext for accounts not migrated yet.
+  // Only the stored password is accepted: no hard-coded or shared env password.
+  const check = user.password ? await verifyPassword(user.password, cleanPass) : { ok: false, legacy: false };
+  if (!check.ok) {
     return { success: false, message: 'Invalid admin username or password.' };
+  }
+
+  // Upgrade legacy plaintext to a hash on successful login (only when HASH_PASSWORDS=true)
+  if (check.legacy && isHashingEnabled()) {
+    try {
+      user.password = await hashPassword(cleanPass);
+    } catch (err) {
+      console.error('[RBAC] Failed to upgrade password hash:', err);
+    }
   }
 
   // Update last login

@@ -87,6 +87,7 @@ import {
   restoreFromBackupZip,
 } from './server/backupService';
 import { logger } from './server/logger';
+import { passwordForStorage, safeEqual } from './server/passwordHash';
 
 // Process resilience: catch unhandled exceptions to prevent container crash
 process.on('uncaughtException', (err) => {
@@ -314,16 +315,21 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 }
 
 // Master Security Password Verification (Protects database wipe, delete all, QR reset/edit)
-const MASTER_SECURITY_PASSWORD = 'MightY99/.1234';
+// Configured via MASTER_SECURITY_PASSWORD in .env (never hard-coded). If unset, protected
+// actions are refused (fail closed) until it is configured.
+const MASTER_SECURITY_PASSWORD = (process.env.MASTER_SECURITY_PASSWORD || '').trim();
+if (!MASTER_SECURITY_PASSWORD) {
+  console.warn('[Security] MASTER_SECURITY_PASSWORD is not set in .env: wipe / QR reset / public-URL actions are disabled.');
+}
 
 function verifySecurityPassword(req: express.Request): boolean {
+  if (!MASTER_SECURITY_PASSWORD) return false;
   const entered = (
     req.body?.securityPassword ||
     req.headers['x-security-password'] ||
-    req.query?.securityPassword ||
     ''
   ).toString().trim();
-  return entered === MASTER_SECURITY_PASSWORD;
+  return entered.length > 0 && safeEqual(entered, MASTER_SECURITY_PASSWORD);
 }
 
 function requireSecurityPassword(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -723,13 +729,13 @@ async function startServer() {
   });
 
   // Admin Authentication (with brute-force protection & JWT token issuance)
-  app.post('/api/admin/login', authRateLimiter, (req, res) => {
+  app.post('/api/admin/login', authRateLimiter, async (req, res) => {
     try {
       const { username, password } = req.body;
       if (!username || !password) {
         return res.status(400).json({ success: false, message: 'Username and password are required' });
       }
-      const result = verifyAdminLogin(username, password);
+      const result = await verifyAdminLogin(String(username), String(password));
       if (!result.success || !result.admin) {
         return res.status(401).json(result);
       }
@@ -985,20 +991,20 @@ async function startServer() {
     }
   });
 
-  app.post('/api/rbac/users', requireAdmin, (req, res) => {
+  app.post('/api/rbac/users', requireAdmin, async (req, res) => {
     try {
       const { username, name, password, role, assignedDepot } = req.body;
-      const user = createRbacUser({ username, name, password, role, assignedDepot });
+      const user = await createRbacUser({ username, name, password, role, assignedDepot });
       res.status(201).json({ success: true, user });
     } catch (err: any) {
       res.status(400).json({ success: false, error: err.message });
     }
   });
 
-  app.put('/api/rbac/users/:username', requireAdmin, (req, res) => {
+  app.put('/api/rbac/users/:username', requireAdmin, async (req, res) => {
     try {
       const { name, password, role, assignedDepot, active } = req.body;
-      const user = updateRbacUser(req.params.username, { name, password, role, assignedDepot, active });
+      const user = await updateRbacUser(req.params.username, { name, password, role, assignedDepot, active });
       res.json({ success: true, user });
     } catch (err: any) {
       res.status(400).json({ success: false, error: err.message });
@@ -1223,13 +1229,14 @@ async function startServer() {
   });
 
   // Create single driver (Admin only)
-  app.post('/api/drivers/create', requireAdmin, (req, res) => {
+  app.post('/api/drivers/create', requireAdmin, async (req, res) => {
     try {
-      const driverData = req.body;
+      const driverData = { ...req.body };
       if (!driverData.name && !driverData.employeeId && !driverData.loginId) {
         return res.status(400).json({ success: false, message: 'Driver details required' });
       }
-      const created = createDriver(driverData);
+      if (driverData.password) driverData.password = await passwordForStorage(String(driverData.password));
+      const { password: _pw, ...created } = createDriver(driverData);
       res.json({ success: true, driver: created });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
@@ -1237,14 +1244,16 @@ async function startServer() {
   });
 
   // Update driver (Admin only)
-  app.post('/api/drivers/update', requireAdmin, (req, res) => {
+  app.post('/api/drivers/update', requireAdmin, async (req, res) => {
     try {
       const { identifier, updates, originalIdentifier, originalEmployeeId, originalLoginId } = req.body;
       const targetId = originalIdentifier || originalEmployeeId || originalLoginId || identifier;
       if (!targetId) {
         return res.status(400).json({ success: false, message: 'Driver identifier is required' });
       }
-      const updated = updateDriver(targetId, updates || {}, {
+      const safeUpdates = { ...(updates || {}) };
+      if (safeUpdates.password) safeUpdates.password = await passwordForStorage(String(safeUpdates.password));
+      const updated = updateDriver(targetId, safeUpdates, {
         originalEmployeeId,
         originalLoginId,
         fallbackIdentifier: identifier,
@@ -1252,7 +1261,8 @@ async function startServer() {
       if (!updated) {
         return res.status(404).json({ success: false, message: 'Driver not found' });
       }
-      res.json({ success: true, driver: updated });
+      const { password: _pw, ...safeUpdated } = updated;
+      res.json({ success: true, driver: safeUpdated });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -1272,13 +1282,13 @@ async function startServer() {
   });
 
   // Driver Authentication (with brute-force protection & JWT token issuance)
-  app.post('/api/drivers/login', authRateLimiter, (req, res) => {
+  app.post('/api/drivers/login', authRateLimiter, async (req, res) => {
     try {
       const { loginId, password } = req.body;
       if (!loginId) {
         return res.status(400).json({ success: false, message: 'Driver ID is required' });
       }
-      const result = verifyDriverLogin(loginId, password || '');
+      const result = await verifyDriverLogin(String(loginId), String(password || ''));
       if (!result.success || !result.driver) {
         return res.status(401).json(result);
       }
@@ -1287,7 +1297,9 @@ async function startServer() {
         name: result.driver.name,
         role: 'driver',
       });
-      res.json({ ...result, token });
+      // Never send the password (or its hash) back to the client
+      const { password: _omitPassword, ...safeDriver } = result.driver;
+      res.json({ ...result, driver: safeDriver, token });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

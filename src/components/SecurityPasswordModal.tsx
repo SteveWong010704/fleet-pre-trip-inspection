@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Lock, Eye, EyeOff, AlertTriangle, ShieldCheck, X } from 'lucide-react';
 
-export const MASTER_SECURITY_PASSWORD = 'MightY99/.1234';
-
 interface SecurityPasswordModalProps {
   isOpen: boolean;
   title: string;
@@ -45,11 +43,7 @@ export const SecurityPasswordModal: React.FC<SecurityPasswordModalProps> = ({
       return;
     }
 
-    if (password !== MASTER_SECURITY_PASSWORD) {
-      setError('Incorrect security password. Access denied.');
-      return;
-    }
-
+    // The password is verified by the server (MASTER_SECURITY_PASSWORD in .env), never in the browser
     try {
       setIsSubmitting(true);
       setError(null);

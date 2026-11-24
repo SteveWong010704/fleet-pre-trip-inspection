@@ -20,6 +20,7 @@ import {
 } from '../src/types';
 import { INITIAL_VEHICLES, INITIAL_DRIVERS } from './seedData';
 import { scheduleDebouncedBackup } from './backupService';
+import { verifyPassword, hashPassword, passwordForStorage, isHashingEnabled } from './passwordHash';
 import { logger } from './logger';
 import { generateHistoricalInspections, calculateExecutiveAnalytics, ExecutiveAnalyticsResult } from './analyticsService';
 import {
@@ -763,7 +764,7 @@ export function getDriverByLogin(loginId: string): Driver | undefined {
   });
 }
 
-export function verifyDriverLogin(loginId: string, passwordAttempt: string): { success: boolean; driver?: Driver; locked?: boolean; remainingAttempts?: number; message?: string } {
+export async function verifyDriverLogin(loginId: string, passwordAttempt: string): Promise<{ success: boolean; driver?: Driver; locked?: boolean; remainingAttempts?: number; message?: string }> {
   const driver = getDriverByLogin(loginId);
   if (!driver) {
     return { success: false, message: 'Driver ID not recognized in fleet directory.' };
@@ -783,12 +784,30 @@ export function verifyDriverLogin(loginId: string, passwordAttempt: string): { s
   }
 
   // Password match: strictly compare against driver's password (or initial default 'password')
+  // (stored value may be a scrypt hash or, for not-yet-migrated accounts, plaintext)
   const cleanPass = passwordAttempt.trim();
-  const isValid = driver.password ? cleanPass === driver.password : cleanPass === 'password';
+  let isValid: boolean;
+  let legacyPlaintext = false;
+  if (driver.password) {
+    const check = await verifyPassword(driver.password, cleanPass);
+    isValid = check.ok;
+    legacyPlaintext = check.legacy;
+  } else {
+    isValid = cleanPass === 'password';
+  }
 
   if (isValid) {
     driver.failedAttempts = 0;
     driver.lockedUntil = null;
+    // Upgrade legacy plaintext to a hash on successful login (only when HASH_PASSWORDS=true)
+    if (legacyPlaintext && isHashingEnabled()) {
+      try {
+        driver.password = await hashPassword(cleanPass);
+        dbSaveDriver(driver).catch(e => console.error('[MSSQL Error] saveDriverPasswordHash:', e));
+      } catch (e) {
+        logger.error('AUTH', 'Failed to upgrade driver password hash:', e);
+      }
+    }
     saveStore();
 
     addAuditLog({
@@ -828,18 +847,30 @@ export async function bulkImportDrivers(driversList: Partial<Driver>[]): Promise
   let added = 0;
   let updated = 0;
 
+  // Hash imported passwords off the event loop (no-op unless HASH_PASSWORDS=true)
+  if (isHashingEnabled()) {
+    driversList = await Promise.all(
+      driversList.map(async (item) =>
+        item.password ? { ...item, password: await passwordForStorage(String(item.password)) } : item
+      )
+    );
+  }
+
   driversList.forEach(item => {
     if (!item.loginId && !item.employeeId) return;
     const loginKey = (item.loginId || item.employeeId || '').toUpperCase().trim();
-    const existingIndex = memoryStore.drivers.findIndex(d => 
+    const existingIndex = memoryStore.drivers.findIndex(d =>
       d.loginId.toUpperCase() === loginKey || 
       d.employeeId.toUpperCase() === loginKey
     );
 
     if (existingIndex >= 0) {
+      const { password: importedPassword, ...itemWithoutPassword } = item;
       memoryStore.drivers[existingIndex] = {
         ...memoryStore.drivers[existingIndex],
-        ...item,
+        ...itemWithoutPassword,
+        // An empty password column in the CSV must not wipe the existing password
+        ...(importedPassword ? { password: importedPassword } : {}),
       };
       updated++;
     } else {
@@ -936,9 +967,13 @@ export function updateDriver(
 
   const originalDriver = { ...memoryStore.drivers[index] };
 
+  // An empty/undefined password in an edit form must never wipe the stored password
+  const { password: newPassword, ...updatesWithoutPassword } = updates;
+
   memoryStore.drivers[index] = {
     ...memoryStore.drivers[index],
-    ...updates,
+    ...updatesWithoutPassword,
+    ...(newPassword ? { password: newPassword } : {}),
     loginId: updates.loginId !== undefined ? String(updates.loginId).trim() : memoryStore.drivers[index].loginId,
     employeeId: updates.employeeId !== undefined ? String(updates.employeeId).trim().toUpperCase() : memoryStore.drivers[index].employeeId,
     // Reset lockout if requested or updated
@@ -1065,10 +1100,10 @@ export function deleteDriver(identifier: string): boolean {
 }
 
 // Admin & RBAC Authentication APIs
-export function verifyAdminLogin(
+export async function verifyAdminLogin(
   usernameAttempt: string,
   passwordAttempt: string
-): {
+): Promise<{
   success: boolean;
   admin?: {
     username: string;
@@ -1078,8 +1113,8 @@ export function verifyAdminLogin(
     permissions?: string[];
   };
   message?: string;
-} {
-  const result = verifyRbacLogin(usernameAttempt, passwordAttempt);
+}> {
+  const result = await verifyRbacLogin(usernameAttempt, passwordAttempt);
   if (result.success && result.admin) {
     addAuditLog({
       eventType: 'ADMIN_LOGIN',
