@@ -1672,18 +1672,18 @@ async function startServer() {
   });
 
   // Automated Rolling Backup Endpoints (Admin only)
-  app.get('/api/backup/status', requireAdmin, (req, res) => {
+  app.get('/api/backup/status', requireAdmin, async (req, res) => {
     try {
-      const status = getBackupStatus();
+      const status = await getBackupStatus();
       res.json({ success: true, ...status });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  app.post('/api/backup/run', requireAdmin, backupHeavyLimiter, (req, res) => {
+  app.post('/api/backup/run', requireAdmin, backupHeavyLimiter, async (req, res) => {
     try {
-      const result = performDailyBackup('manual_admin_trigger');
+      const result = await performDailyBackup('manual_admin_trigger');
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
