@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { InspectionRecord, AuditLog } from '../src/types';
 import { logger } from './logger';
 
@@ -149,21 +150,47 @@ function generateAuditLogsCsv(logs: AuditLog[]): string {
   return [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
 }
 
-/**
- * Helper to calculate total directory size in bytes
- */
-function getDirectorySizeBytes(dirPath: string): number {
-  let total = 0;
-  if (!fs.existsSync(dirPath)) return 0;
+const fsp = fs.promises;
+
+async function pathExists(p: string): Promise<boolean> {
   try {
-    const files = fs.readdirSync(dirPath);
-    for (const f of files) {
-      const full = path.join(dirPath, f);
-      const stat = fs.statSync(full);
-      if (stat.isDirectory()) {
-        total += getDirectorySizeBytes(full);
+    await fsp.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Lets pending HTTP requests (e.g. logins) run between chunks of backup work. */
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/**
+ * Peak inspection rush (06:00-09:59 & 17:00-19:59, Malaysia time).
+ * Automatic (non-manual) backups never start during these hours.
+ */
+export function isPeakHours(date: Date = new Date()): boolean {
+  const hour =
+    Number(
+      new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', hour: '2-digit', hour12: false }).format(date)
+    ) % 24;
+  return (hour >= 6 && hour <= 9) || (hour >= 17 && hour <= 19);
+}
+
+/**
+ * Helper to calculate total directory size in bytes (non-blocking)
+ */
+async function getDirectorySizeBytes(dirPath: string): Promise<number> {
+  let total = 0;
+  try {
+    const entries = await fsp.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        total += await getDirectorySizeBytes(full);
       } else {
-        total += stat.size;
+        try {
+          total += (await fsp.stat(full)).size;
+        } catch {}
       }
     }
   } catch {}
@@ -177,7 +204,7 @@ function getDirectorySizeBytes(dirPath: string): number {
  * - Saves both JSON and Excel-friendly CSV tables.
  * - Enforces the 5-day retention policy (auto-deleting day 6 and older).
  */
-export function performDailyBackup(reason: string = 'scheduled'): {
+export interface DailyBackupResult {
   success: boolean;
   backupRootDir: string;
   backedUpDates: string[];
@@ -185,11 +212,28 @@ export function performDailyBackup(reason: string = 'scheduled'): {
   purgedDays: string[];
   totalPhotosSaved: number;
   error?: string;
-} {
+}
+
+let backupInFlight: Promise<DailyBackupResult> | null = null;
+
+/**
+ * Runs the daily backup without blocking the event loop (all disk I/O is async and
+ * yields between units of work), only one run at a time, and only for dates whose
+ * data actually changed since the last backup.
+ */
+export function performDailyBackup(reason: string = 'scheduled'): Promise<DailyBackupResult> {
+  if (backupInFlight) return backupInFlight;
+  backupInFlight = runDailyBackup(reason).finally(() => {
+    backupInFlight = null;
+  });
+  return backupInFlight;
+}
+
+async function runDailyBackup(reason: string): Promise<DailyBackupResult> {
   const rootDir = getBackupRootDir();
   const storeSource = path.join(process.cwd(), 'data', 'fleet_store.json');
 
-  if (!fs.existsSync(storeSource)) {
+  if (!(await pathExists(storeSource))) {
     return {
       success: false,
       backupRootDir: rootDir,
@@ -202,7 +246,7 @@ export function performDailyBackup(reason: string = 'scheduled'): {
   }
 
   try {
-    const storeRaw = fs.readFileSync(storeSource, 'utf-8');
+    const storeRaw = await fsp.readFile(storeSource, 'utf-8');
     const storeData = JSON.parse(storeRaw);
     const inspections: InspectionRecord[] = storeData.inspections || [];
     const auditLogs: AuditLog[] = storeData.auditLogs || [];
@@ -227,29 +271,57 @@ export function performDailyBackup(reason: string = 'scheduled'): {
     const backedUpDates: string[] = [];
     let totalPhotosSaved = 0;
 
+    const storeHash = crypto.createHash('sha1').update(storeRaw).digest('hex');
+
     for (const dateStr of datesToBackup) {
+      await yieldToEventLoop();
+
       const dayFolder = path.join(rootDir, `backup_${dateStr}`);
-      if (!fs.existsSync(dayFolder)) {
-        fs.mkdirSync(dayFolder, { recursive: true });
-      }
 
       // Filter inspection records and audit logs for this specific date
       const dateInspections = inspections.filter((i) => (i.timestamp || '').slice(0, 10) === dateStr);
       const dateAuditLogs = auditLogs.filter((l) => (l.timestamp || '').slice(0, 10) === dateStr);
 
+      // Incremental backup: skip dates whose data is unchanged since the last backup.
+      // Today's fingerprint also covers the full store, so today's disaster-recovery
+      // snapshot is refreshed whenever anything (vehicles, drivers, ...) changes.
+      const contentHash = crypto
+        .createHash('sha1')
+        .update(JSON.stringify(dateInspections))
+        .update('|')
+        .update(JSON.stringify(dateAuditLogs))
+        .update(dateStr === todayStr ? `|${storeHash}` : '')
+        .digest('hex');
+      const manifestFile = path.join(dayFolder, 'manifest.json');
+      const zipFile = path.join(rootDir, `backup_${dateStr}.zip`);
+      if ((await pathExists(manifestFile)) && (await pathExists(zipFile))) {
+        try {
+          const prev = JSON.parse(await fsp.readFile(manifestFile, 'utf-8'));
+          if (prev.contentHash === contentHash) {
+            totalPhotosSaved += Number(prev.photosCount) || 0;
+            backedUpDates.push(dateStr);
+            continue;
+          }
+        } catch {}
+      }
+
+      if (!(await pathExists(dayFolder))) {
+        await fsp.mkdir(dayFolder, { recursive: true });
+      }
+
       // 1. Save Inspection Records for this date (JSON & CSV)
       const inspJsonFile = path.join(dayFolder, `inspections_${dateStr}.json`);
-      fs.writeFileSync(inspJsonFile, JSON.stringify(dateInspections, null, 2), 'utf-8');
+      await fsp.writeFile(inspJsonFile, JSON.stringify(dateInspections, null, 2), 'utf-8');
 
       const inspCsvFile = path.join(dayFolder, `inspections_${dateStr}.csv`);
-      fs.writeFileSync(inspCsvFile, generateInspectionsCsv(dateInspections), 'utf-8');
+      await fsp.writeFile(inspCsvFile, generateInspectionsCsv(dateInspections), 'utf-8');
 
       // 2. Save Audit Logs for this date (JSON & CSV)
       const auditJsonFile = path.join(dayFolder, `audit_logs_${dateStr}.json`);
-      fs.writeFileSync(auditJsonFile, JSON.stringify(dateAuditLogs, null, 2), 'utf-8');
+      await fsp.writeFile(auditJsonFile, JSON.stringify(dateAuditLogs, null, 2), 'utf-8');
 
       const auditCsvFile = path.join(dayFolder, `audit_logs_${dateStr}.csv`);
-      fs.writeFileSync(auditCsvFile, generateAuditLogsCsv(dateAuditLogs), 'utf-8');
+      await fsp.writeFile(auditCsvFile, generateAuditLogsCsv(dateAuditLogs), 'utf-8');
 
       // 3. Extract & Backup ALL Photos for this date organized cleanly as:
       // upload/[date]/[number_plate]/01_Tires_Wheels.jpg ... 10_Fluids_Powertrain.jpg
@@ -334,20 +406,17 @@ export function performDailyBackup(reason: string = 'scheduled'): {
       }> = [];
 
       for (const insp of dateInspections) {
+        await yieldToEventLoop();
         const cleanPlate = (insp.vehicleNo || 'VEHICLE').trim().toUpperCase().replace(/[^a-zA-Z0-9]/g, '_');
 
         // Create organized directories: upload/date/number_plate AND photos/number_plate
         const uploadPlateDir = path.join(dayFolder, 'upload', dateStr, cleanPlate);
         const photosPlateDir = path.join(dayFolder, 'photos', cleanPlate);
-        if (!fs.existsSync(uploadPlateDir)) {
-          fs.mkdirSync(uploadPlateDir, { recursive: true });
-        }
-        if (!fs.existsSync(photosPlateDir)) {
-          fs.mkdirSync(photosPlateDir, { recursive: true });
-        }
+        await fsp.mkdir(uploadPlateDir, { recursive: true });
+        await fsp.mkdir(photosPlateDir, { recursive: true });
 
         // Helper to extract buffer from either base64 or local uploads path
-        const extractBuffer = (photoUrl: string): Buffer | null => {
+        const extractBuffer = async (photoUrl: string): Promise<Buffer | null> => {
           if (!photoUrl) return null;
           if (photoUrl.startsWith('data:image/')) {
             try {
@@ -358,12 +427,10 @@ export function performDailyBackup(reason: string = 'scheduled'): {
             }
           } else if (photoUrl.startsWith('/uploads/')) {
             const localSrc = path.join(process.cwd(), photoUrl.replace(/^\//, ''));
-            if (fs.existsSync(localSrc)) {
-              try {
-                return fs.readFileSync(localSrc);
-              } catch {
-                return null;
-              }
+            try {
+              return await fsp.readFile(localSrc);
+            } catch {
+              return null;
             }
           }
           return null;
@@ -371,20 +438,21 @@ export function performDailyBackup(reason: string = 'scheduled'): {
 
         // 3.1 Save 10 Checkpoint Inspection Photos (Saves ALL photos: 5 tyres, 4 cargo doors, fluids, etc. uniquely)
         if (Array.isArray(insp.photos)) {
-          insp.photos.forEach((photo, idx) => {
+          for (let idx = 0; idx < insp.photos.length; idx++) {
+            const photo = insp.photos[idx];
             const itemInfo = photo.itemId ? standardTitles[photo.itemId] : undefined;
             const code = itemInfo?.code || (idx + 1);
             const title = itemInfo?.title || photo.itemTitle || `Checkpoint_${code}`;
             const fileName = getUniqueFileName(cleanPlate, code, title, photo, idx);
 
-            const buffer = extractBuffer(photo.url);
+            const buffer = await extractBuffer(photo.url);
             if (buffer) {
               const uploadDest = path.join(uploadPlateDir, fileName);
               const photosDest = path.join(photosPlateDir, fileName);
 
               try {
-                fs.writeFileSync(uploadDest, buffer);
-                fs.writeFileSync(photosDest, buffer);
+                await fsp.writeFile(uploadDest, buffer);
+                await fsp.writeFile(photosDest, buffer);
 
                 // Parity guarantee: if photo.url was a local /uploads/ path with a different basename,
                 // also save a copy under that exact original filename so both old & new URLs resolve perfectly
@@ -392,8 +460,8 @@ export function performDailyBackup(reason: string = 'scheduled'): {
                   const origBase = path.basename(photo.url);
                   if (origBase && origBase !== fileName) {
                     try {
-                      fs.writeFileSync(path.join(uploadPlateDir, origBase), buffer);
-                      fs.writeFileSync(path.join(photosPlateDir, origBase), buffer);
+                      await fsp.writeFile(path.join(uploadPlateDir, origBase), buffer);
+                      await fsp.writeFile(path.join(photosPlateDir, origBase), buffer);
                     } catch {}
                   }
                 }
@@ -418,23 +486,23 @@ export function performDailyBackup(reason: string = 'scheduled'): {
                 console.error(`[Backup Photo Error] Failed to write ${fileName}:`, photoErr);
               }
             }
-          });
+          }
         }
 
         // 3.2 Save driver signature if present
         if (insp.signature) {
-          const sigBuffer = extractBuffer(insp.signature);
+          const sigBuffer = await extractBuffer(insp.signature);
           if (sigBuffer) {
             try {
-              fs.writeFileSync(path.join(uploadPlateDir, 'signature.png'), sigBuffer);
-              fs.writeFileSync(path.join(photosPlateDir, 'signature.png'), sigBuffer);
+              await fsp.writeFile(path.join(uploadPlateDir, 'signature.png'), sigBuffer);
+              await fsp.writeFile(path.join(photosPlateDir, 'signature.png'), sigBuffer);
             } catch {}
           }
         }
       }
 
       // Save photos catalog index
-      fs.writeFileSync(
+      await fsp.writeFile(
         path.join(dayFolder, 'photos_catalog.json'),
         JSON.stringify(photosCatalog, null, 2),
         'utf-8'
@@ -442,7 +510,7 @@ export function performDailyBackup(reason: string = 'scheduled'): {
 
       // 4. Save full store snapshot for total disaster recovery
       const storeSnapshotFile = path.join(dayFolder, 'fleet_store_snapshot.json');
-      fs.writeFileSync(storeSnapshotFile, storeRaw, 'utf-8');
+      await fsp.writeFile(storeSnapshotFile, storeRaw, 'utf-8');
 
       // 5. Create human-readable summary text file
       const summaryText = [
@@ -485,12 +553,13 @@ export function performDailyBackup(reason: string = 'scheduled'): {
         '================================================================================',
       ].join('\n');
 
-      fs.writeFileSync(path.join(dayFolder, 'SUMMARY.txt'), summaryText, 'utf-8');
+      await fsp.writeFile(path.join(dayFolder, 'SUMMARY.txt'), summaryText, 'utf-8');
 
       // 6. Write manifest
-      const dirSizeBytes = getDirectorySizeBytes(dayFolder);
+      const dirSizeBytes = await getDirectorySizeBytes(dayFolder);
       const manifest = {
         backupDate: dateStr,
+        contentHash,
         timestamp: new Date().toISOString(),
         inspectionsCount: dateInspections.length,
         auditLogsCount: dateAuditLogs.length,
@@ -500,15 +569,19 @@ export function performDailyBackup(reason: string = 'scheduled'): {
         platform: process.platform,
         backupRootDir: rootDir,
       };
-      fs.writeFileSync(path.join(dayFolder, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf-8');
+      await fsp.writeFile(manifestFile, JSON.stringify(manifest, null, 2), 'utf-8');
 
       // 7. Create ZIP archive for easy single-click download (if adm-zip is installed)
       const AdmZipClass = getAdmZip();
       if (AdmZipClass) {
         try {
+          await yieldToEventLoop();
           const zip = new AdmZipClass();
           zip.addLocalFolder(dayFolder);
-          zip.writeZip(path.join(rootDir, `backup_${dateStr}.zip`));
+          // Write to a temp file then rename so a crash never leaves a half-written zip
+          const zipTmp = `${zipFile}.tmp`;
+          await zip.writeZipPromise(zipTmp);
+          await fsp.rename(zipTmp, zipFile);
         } catch (zipErr) {
           console.warn(`[Backup Zip Warning] Failed to build zip for ${dateStr}:`, zipErr);
         }
@@ -519,7 +592,7 @@ export function performDailyBackup(reason: string = 'scheduled'): {
 
     // 8. Enforce 90-Day Retention Policy:
     // Scan all backup_YYYY-MM-DD folders, sort chronologically, and purge any older than the 90 latest days (Day 91 auto-purged)
-    const allEntries = fs.readdirSync(rootDir);
+    const allEntries = await fsp.readdir(rootDir);
     const dayFolders = allEntries
       .filter((name) => name.startsWith('backup_') && /^\d{4}-\d{2}-\d{2}$/.test(name.replace('backup_', '')))
       .sort(); // Lexicographical sort on YYYY-MM-DD is chronological
@@ -534,12 +607,9 @@ export function performDailyBackup(reason: string = 'scheduled'): {
         const fullZipPath = path.join(rootDir, `${oldFolder}.zip`);
 
         try {
-          if (fs.existsSync(fullFolderPath)) {
-            fs.rmSync(fullFolderPath, { recursive: true, force: true });
-          }
-          if (fs.existsSync(fullZipPath)) {
-            fs.rmSync(fullZipPath, { force: true });
-          }
+          await yieldToEventLoop();
+          await fsp.rm(fullFolderPath, { recursive: true, force: true });
+          await fsp.rm(fullZipPath, { force: true });
           purgedDays.push(oldFolder);
           logger.info(
             'BACKUP',
@@ -561,14 +631,12 @@ export function performDailyBackup(reason: string = 'scheduled'): {
       const folderPath = path.join(rootDir, folderName);
       const manifestPath = path.join(folderPath, 'manifest.json');
       try {
-        if (fs.existsSync(manifestPath)) {
-          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-          totalBackupBytes += Math.max(0, Number(manifest.folderSizeKb) || 0) * 1024;
-        }
+        const manifest = JSON.parse(await fsp.readFile(manifestPath, 'utf-8'));
+        totalBackupBytes += Math.max(0, Number(manifest.folderSizeKb) || 0) * 1024;
       } catch {}
       const zipPath = path.join(rootDir, `${folderName}.zip`);
       try {
-        if (fs.existsSync(zipPath)) totalBackupBytes += fs.statSync(zipPath).size;
+        totalBackupBytes += (await fsp.stat(zipPath)).size;
       } catch {}
     }
     lastBackupSizeKb = Math.round(totalBackupBytes / 1024);
@@ -608,9 +676,8 @@ export function performDailyBackup(reason: string = 'scheduled'): {
  * Protects 400-driver morning peak hours (06:00 - 10:00) from heavy ZIP CPU spikes.
  */
 export function scheduleDebouncedBackup(delayMs: number = 300000) {
-  const currentHour = new Date().getHours();
-  // During peak morning / evening inspection rush (06:00-09:30 & 17:00-19:30), defer CPU-heavy ZIP compression
-  if ((currentHour >= 6 && currentHour <= 9) || (currentHour >= 17 && currentHour <= 19)) {
+  // During peak morning / evening inspection rush, defer CPU-heavy ZIP compression
+  if (isPeakHours()) {
     return;
   }
 
@@ -618,26 +685,38 @@ export function scheduleDebouncedBackup(delayMs: number = 300000) {
     clearTimeout(debounceTimer);
   }
   debounceTimer = setTimeout(() => {
-    performDailyBackup('data_change_auto');
+    // The delay may land inside peak hours; the hourly check will pick it up later.
+    if (isPeakHours()) return;
+    performDailyBackup('data_change_auto').catch((err) => logger.error('BACKUP', 'Debounced backup failed:', err));
   }, delayMs);
 }
 
 /**
  * Returns current backup status with full day-by-day inspection, photo, and audit log telemetry
  */
-export function getBackupStatus(): BackupStatus {
+let statusInFlight: Promise<BackupStatus> | null = null;
+
+export function getBackupStatus(): Promise<BackupStatus> {
   const now = Date.now();
   if (cachedBackupStatus && now - cachedBackupStatus.timestamp < BACKUP_STATUS_CACHE_TTL_MS) {
-    return cachedBackupStatus.status;
+    return Promise.resolve(cachedBackupStatus.status);
   }
+  // Concurrent callers share one directory scan
+  if (!statusInFlight) {
+    statusInFlight = buildBackupStatus().finally(() => {
+      statusInFlight = null;
+    });
+  }
+  return statusInFlight;
+}
 
+async function buildBackupStatus(): Promise<BackupStatus> {
   const rootDir = getBackupRootDir();
   const existingDays: DayBackupDetail[] = [];
 
   try {
-    if (fs.existsSync(rootDir)) {
-      const entries = fs
-        .readdirSync(rootDir)
+    if (await pathExists(rootDir)) {
+      const entries = (await fsp.readdir(rootDir))
         .filter((name) => name.startsWith('backup_') && /^\d{4}-\d{2}-\d{2}$/.test(name.replace('backup_', '')))
         .sort()
         .reverse(); // Newest first
@@ -646,55 +725,43 @@ export function getBackupStatus(): BackupStatus {
         const dateStr = folderName.replace('backup_', '');
         const folderPath = path.join(rootDir, folderName);
         const zipPath = path.join(rootDir, `${folderName}.zip`);
-        const hasZip = fs.existsSync(zipPath);
+        const hasZip = await pathExists(zipPath);
 
         let inspectionsCount = 0;
         let auditLogsCount = 0;
         let photosCount = 0;
         let lastUpdated = '';
+        let manifest: any = null;
 
-        // Read manifest if available
         const manifestPath = path.join(folderPath, 'manifest.json');
-        if (fs.existsSync(manifestPath)) {
-          try {
-            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-            inspectionsCount = manifest.inspectionsCount || 0;
-            auditLogsCount = manifest.auditLogsCount || 0;
-            photosCount = manifest.photosCount || 0;
-            lastUpdated = manifest.timestamp || '';
-          } catch {}
+        try {
+          manifest = JSON.parse(await fsp.readFile(manifestPath, 'utf-8'));
+        } catch {}
+
+        if (manifest) {
+          inspectionsCount = manifest.inspectionsCount || 0;
+          auditLogsCount = manifest.auditLogsCount || 0;
+          photosCount = manifest.photosCount || 0;
+          lastUpdated = manifest.timestamp || '';
         } else {
           // Count files directly
-          const inspJson = path.join(folderPath, `inspections_${dateStr}.json`);
-          if (fs.existsSync(inspJson)) {
-            try {
-              inspectionsCount = JSON.parse(fs.readFileSync(inspJson, 'utf-8')).length;
-            } catch {}
-          }
-          const photosDir = path.join(folderPath, 'photos');
-          if (fs.existsSync(photosDir)) {
-            try {
-              photosCount = fs.readdirSync(photosDir).length;
-            } catch {}
-          }
-        }
-
-        // Prefer the size recorded when the backup was created. Recursively walking
-        // every photo and snapshot here made this status API extremely expensive.
-        // Only legacy folders without a usable manifest use the slower fallback.
-        let folderSizeKb = 0;
-        let hasValidManifestSize = false;
-        if (fs.existsSync(manifestPath)) {
           try {
-            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-            if (Number.isFinite(Number(manifest.folderSizeKb)) && Number(manifest.folderSizeKb) >= 0) {
-              folderSizeKb = Number(manifest.folderSizeKb);
-              hasValidManifestSize = true;
-            }
+            inspectionsCount = JSON.parse(
+              await fsp.readFile(path.join(folderPath, `inspections_${dateStr}.json`), 'utf-8')
+            ).length;
+          } catch {}
+          try {
+            photosCount = (await fsp.readdir(path.join(folderPath, 'photos'))).length;
           } catch {}
         }
-        if (!hasValidManifestSize) {
-          folderSizeKb = Math.round(getDirectorySizeBytes(folderPath) / 1024);
+
+        // Prefer the size recorded when the backup was created. Only legacy folders
+        // without a usable manifest use the slower directory walk.
+        let folderSizeKb = 0;
+        if (manifest && Number.isFinite(Number(manifest.folderSizeKb)) && Number(manifest.folderSizeKb) >= 0) {
+          folderSizeKb = Number(manifest.folderSizeKb);
+        } else {
+          folderSizeKb = Math.round((await getDirectorySizeBytes(folderPath)) / 1024);
         }
 
         existingDays.push({
@@ -722,10 +789,10 @@ export function getBackupStatus(): BackupStatus {
     lastBackupTime,
     lastBackupSizeKb,
     totalBackupsRun,
-    status: 'idle',
+    status: backupInFlight ? 'running' : 'idle',
   };
 
-  cachedBackupStatus = { status: result, timestamp: now };
+  cachedBackupStatus = { status: result, timestamp: Date.now() };
   return result;
 }
 
@@ -975,13 +1042,19 @@ export function initBackupService() {
   console.log(`[Backup Engine] Initializing automated backup service. Root: ${getBackupRootDir()}`);
 
   // Initial backup shortly after startup
+  // (skipped during peak inspection hours; the hourly check below catches up later)
   setTimeout(() => {
-    performDailyBackup('server_boot');
+    if (isPeakHours()) {
+      logger.info('BACKUP', 'Boot backup deferred: peak inspection hours.');
+      return;
+    }
+    performDailyBackup('server_boot').catch((err) => logger.error('BACKUP', 'Boot backup failed:', err));
   }, 3000);
 
   // Hourly recurring backup & retention pruning check
   setInterval(async () => {
-    performDailyBackup('hourly_auto_check');
+    if (isPeakHours()) return; // never compete with drivers logging in / submitting
+    performDailyBackup('hourly_auto_check').catch((err) => logger.error('BACKUP', 'Hourly backup failed:', err));
     try {
       const { pruneOldInspections } = await import('./storage');
       pruneOldInspections(45);
