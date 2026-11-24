@@ -296,7 +296,7 @@ export const FleetOverview: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<number>(1);
 
   const filteredVehicles = useMemo(() => {
-    return vehicles.filter(v => {
+    const matched = vehicles.filter(v => {
       const vReg = v.region || (masterDepots.find(d => d.code === v.branch)?.regionId) || 'CENTRAL';
       if (selectedRegion !== 'ALL' && vReg !== selectedRegion) return false;
       const vCat = v.truckCategory || (v.model && v.model.toLowerCase().includes('feeder') ? 'Feeder' : 'Small Truck');
@@ -312,7 +312,25 @@ export const FleetOverview: React.FC = () => {
         (v.branch && v.branch.toLowerCase().includes(q))
       );
     });
-  }, [vehicles, selectedRegion, selectedCategory, search, masterDepots]);
+
+    // With a depot selected, list vehicles in route order (BL01, BL02, ... BL10) instead of
+    // the stored order. Routes that do not follow the depot's pattern (e.g. SBL1, FEEDER)
+    // and vehicles with no route go after the regular ones; ties fall back to the plate.
+    if (selectedBranch === 'ALL') return matched;
+    const prefix = selectedBranch.toUpperCase();
+    const routeOf = (v: Vehicle) => (v.assignedRoute || '').trim().toUpperCase();
+    const routePattern = new RegExp('^' + prefix.replace(/[^A-Z0-9]/g, '') + '[0-9]+$');
+    const rank = (r: string) => (!r ? 2 : routePattern.test(r) ? 0 : 1);
+    return [...matched].sort((a, b) => {
+      const ra = routeOf(a);
+      const rb = routeOf(b);
+      return (
+        rank(ra) - rank(rb) ||
+        ra.localeCompare(rb, undefined, { numeric: true }) ||
+        a.vehicleNo.localeCompare(b.vehicleNo, undefined, { numeric: true })
+      );
+    });
+  }, [vehicles, selectedRegion, selectedCategory, selectedBranch, search, masterDepots]);
 
   const totalPages = Math.ceil(filteredVehicles.length / pageSize) || 1;
   const paginatedVehicles = useMemo(() => {
