@@ -152,6 +152,23 @@ function generateAuditLogsCsv(logs: AuditLog[]): string {
 
 const fsp = fs.promises;
 
+const klDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kuala_Lumpur',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+/**
+ * Business date (YYYY-MM-DD) in Malaysia time. Backups used to bucket by the UTC date, so anything
+ * recorded between 00:00 and 08:00 local time landed in the previous day's backup, while the
+ * uploads folders and the UI use the Malaysia date.
+ */
+function klDateKey(input?: string | Date): string {
+  const d = input ? new Date(input) : new Date();
+  return isNaN(d.getTime()) ? '' : klDateFormatter.format(d);
+}
+
 async function pathExists(p: string): Promise<boolean> {
   try {
     await fsp.access(p);
@@ -251,19 +268,21 @@ async function runDailyBackup(reason: string): Promise<DailyBackupResult> {
     const inspections: InspectionRecord[] = storeData.inspections || [];
     const auditLogs: AuditLog[] = storeData.auditLogs || [];
 
-    const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const todayStr = klDateKey(); // YYYY-MM-DD (Malaysia time)
 
     // Collect all dates that exist in current data, ensuring today is included
     const allDatesSet = new Set<string>();
     allDatesSet.add(todayStr);
     inspections.forEach((i) => {
-      if (i.timestamp) {
-        allDatesSet.add(i.timestamp.slice(0, 10));
+      const key = i.timestamp ? klDateKey(i.timestamp) : '';
+      if (key) {
+        allDatesSet.add(key);
       }
     });
     auditLogs.forEach((l) => {
-      if (l.timestamp) {
-        allDatesSet.add(l.timestamp.slice(0, 10));
+      const key = l.timestamp ? klDateKey(l.timestamp) : '';
+      if (key) {
+        allDatesSet.add(key);
       }
     });
 
@@ -279,8 +298,8 @@ async function runDailyBackup(reason: string): Promise<DailyBackupResult> {
       const dayFolder = path.join(rootDir, `backup_${dateStr}`);
 
       // Filter inspection records and audit logs for this specific date
-      const dateInspections = inspections.filter((i) => (i.timestamp || '').slice(0, 10) === dateStr);
-      const dateAuditLogs = auditLogs.filter((l) => (l.timestamp || '').slice(0, 10) === dateStr);
+      const dateInspections = inspections.filter((i) => klDateKey(i.timestamp) === dateStr);
+      const dateAuditLogs = auditLogs.filter((l) => klDateKey(l.timestamp) === dateStr);
 
       // Incremental backup: skip dates whose data is unchanged since the last backup.
       // Today's fingerprint also covers the full store, so today's disaster-recovery
@@ -889,7 +908,7 @@ export async function restoreFromBackupZip(zipBuffer: Buffer, originalFilename?:
         });
 
         // Write to primary uploads location
-        const targetDate = dateStr || backupDate || new Date().toISOString().slice(0, 10);
+        const targetDate = dateStr || backupDate || klDateKey();
         const subPath = cleanPlate ? path.join(targetDate, cleanPlate, basename) : path.join(targetDate, basename);
         const targetUploadPath = path.join(uploadsDir, subPath);
         const targetDir = path.dirname(targetUploadPath);
@@ -920,7 +939,7 @@ export async function restoreFromBackupZip(zipBuffer: Buffer, originalFilename?:
   // 2.5 Cross-reference every inspection record's photo URLs to guarantee they exist on disk at the exact expected path
   if (inspectionsList.length > 0 && photoEntries.length > 0) {
     for (const insp of inspectionsList) {
-      const inspDate = (insp.timestamp ? insp.timestamp.slice(0, 10) : backupDate) || backupDate || new Date().toISOString().slice(0, 10);
+      const inspDate = (insp.timestamp ? klDateKey(insp.timestamp) : backupDate) || backupDate || klDateKey();
       const cleanPlate = (insp.vehicleNo || 'FLEET').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '_');
 
       const ensurePhotoOnDisk = (photoUrl?: string, itemCode?: number | string) => {

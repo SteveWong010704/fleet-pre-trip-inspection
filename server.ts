@@ -88,6 +88,7 @@ import {
 } from './server/backupService';
 import { logger } from './server/logger';
 import { passwordForStorage, safeEqual } from './server/passwordHash';
+import { requestContext } from './server/requestContext';
 
 // Process resilience: catch unhandled exceptions to prevent container crash
 process.on('uncaughtException', (err) => {
@@ -407,6 +408,16 @@ async function startServer() {
     });
 
     next();
+  });
+
+  // Request context: lets audit logs record the real client IP and the authenticated user
+  app.use((req, res, next) => {
+    const ctx: { ip: string; user?: { username: string; name: string; role: string } } = {
+      ip: req.ip || req.socket.remoteAddress || 'unknown',
+    };
+    const payload = tryGetAuthUser(req);
+    if (payload) ctx.user = { username: payload.sub, name: payload.name, role: payload.role };
+    requestContext.run(ctx, next);
   });
 
   // Security HTTP Headers
@@ -2010,6 +2021,16 @@ async function startServer() {
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Server] Fleet Pre-Trip Inspection System running on http://0.0.0.0:${PORT}`);
+  });
+
+  // If the port is already taken another instance is running. Exit instead of lingering as a
+  // zombie: it would otherwise keep its backup timers and write to the same data files.
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      logger.error('PROCESS', `Port ${PORT} is already in use (another instance running?). Exiting.`);
+      process.exit(1);
+    }
+    logger.error('PROCESS', 'HTTP server error:', err);
   });
 
   const gracefulShutdown = (signal: string) => {

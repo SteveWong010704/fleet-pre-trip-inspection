@@ -22,6 +22,7 @@ import { INITIAL_VEHICLES, INITIAL_DRIVERS } from './seedData';
 import { scheduleDebouncedBackup } from './backupService';
 import { verifyPassword, hashPassword, passwordForStorage, isHashingEnabled } from './passwordHash';
 import { logger } from './logger';
+import { requestContext } from './requestContext';
 import { generateHistoricalInspections, calculateExecutiveAnalytics, ExecutiveAnalyticsResult } from './analyticsService';
 import {
   initOperationsStore,
@@ -1319,7 +1320,12 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
   const timestamp = dateObj.toISOString(); // Store absolute timestamp in UTC; convert for business dates/display.
   const dateStr = getCalendarDateString(dateObj);
   const yyyymmdd = dateStr.replace(/-/g, '');
-  const seq = String(memoryStore.inspections.length + 1).padStart(4, '0');
+  // Sequence is based on the record count, but must never collide with an existing id
+  // (counts shift after pruning, restoring or syncing from SQL Server)
+  const existingIds = new Set(memoryStore.inspections.map((i) => i.id));
+  let seqNum = memoryStore.inspections.length + 1;
+  while (existingIds.has(`INSP-${yyyymmdd}-${String(seqNum).padStart(4, '0')}`)) seqNum++;
+  const seq = String(seqNum).padStart(4, '0');
   const id = `INSP-${yyyymmdd}-${seq}`;
   const formattedDate = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kuala_Lumpur', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(dateObj);
 
@@ -2496,11 +2502,21 @@ export function clearAllDrivers(): { success: boolean; message: string } {
 }
 
 // Audit Logs
+// Generic placeholder operators used by callers that do not know who is acting
+const GENERIC_OPERATORS = new Set(['Admin', 'Admin Dispatcher']);
+
 export function addAuditLog(log: Omit<AuditLog, 'id' | 'timestamp'>): AuditLog {
+  // Replace the hard-coded placeholder IPs / generic operator names with the real request context
+  const ctx = requestContext.getStore();
   const record: AuditLog = {
     id: `LOG-${Date.now().toString(36).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`,
     timestamp: new Date().toISOString(),
     ...log,
+    ip: ctx?.ip || log.ip,
+    operator:
+      ctx?.user && GENERIC_OPERATORS.has(log.operator)
+        ? `${ctx.user.username} (${ctx.user.name})`
+        : log.operator,
   };
   memoryStore.auditLogs.unshift(record);
   if (memoryStore.auditLogs.length > 500) {

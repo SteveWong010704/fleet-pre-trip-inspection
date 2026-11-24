@@ -90,7 +90,7 @@ export const InspectionCertificate: React.FC<InspectionCertificateProps> = ({
     const attempts = Number(img.dataset.fallbackTried || 0);
     img.dataset.fallbackTried = String(attempts + 1);
 
-    const dateStr = record.timestamp ? record.timestamp.slice(0, 10) : '';
+    const dateStr = record.timestamp ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(record.timestamp)) : '';
     const cleanPlate = (record.vehicleNo || '').trim().toUpperCase().replace(/[^a-zA-Z0-9]/g, '_');
     const baseName = (photoUrl || img.src).split('/').pop() || '';
 
