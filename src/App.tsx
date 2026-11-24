@@ -18,7 +18,7 @@ import { ExecutiveDashboard } from './components/AdminPortal/ExecutiveDashboard'
 import { OperationsManager } from './components/AdminPortal/OperationsManager';
 import { UserManagement } from './components/AdminPortal/UserManagement';
 import { DriverQaPatternReport } from './components/AdminPortal/DriverQaPatternReport';
-import { fetchVehicleByPlate, checkDriverDailyInspection, checkVehicleDailyInspection, clearAuthToken } from './lib/api';
+import { fetchVehicleByPlate, checkDriverDailyInspection, checkVehicleDailyInspection, clearAuthToken, setActiveAuthRole } from './lib/api';
 import { syncPublicBaseUrlFromServer } from './lib/publicUrl';
 import { getCheckpointRequiredPhotoCount } from './lib/checkpointConfig';
 import { getDefaultSystemChecks } from './lib/quickChecklistConfig';
@@ -36,6 +36,9 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'driver' | 'admin'>(() => {
     return isDriverQrScan() ? 'driver' : 'admin';
   });
+
+  // Keep API calls on the token that belongs to the view being shown (admin vs driver)
+  setActiveAuthRole(currentView);
 
   type AdminTab = 'analytics' | 'fleet' | 'drivers' | 'operations' | 'history' | 'qa_pattern' | 'bulk' | 'qr' | 'logs' | 'backup' | 'users';
 
@@ -211,7 +214,7 @@ export default function App() {
   };
 
   const handleDriverLogout = () => {
-    clearAuthToken();
+    clearAuthToken('driver');
     setActiveDriver(null);
     setSelectedVehicle(null);
     setCompletedRecord(null);
@@ -226,7 +229,7 @@ export default function App() {
   };
 
   const handleAdminLogout = () => {
-    clearAuthToken();
+    clearAuthToken('admin');
     setActiveAdmin(null);
     try {
       sessionStorage.removeItem('FLEET_ACTIVE_ADMIN');

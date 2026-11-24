@@ -1,33 +1,67 @@
 import { Vehicle, Driver, InspectionRecord, AuditLog, FleetStats, ExecutiveAnalyticsData, RegionItem, DepotItem, RouteItem, RbacRole, RbacUser, RbacFeature, PhotoQaAudit, DriverQaReportResult, UninspectedDriversReportResult, UninspectedDriverItem } from '../types';
 
-const AUTH_TOKEN_KEY = 'FLEET_SESSION_JWT';
+// Admin and driver sessions keep SEPARATE tokens. Previously both used one key, so logging in as a
+// driver in the same browser replaced the admin token and every admin call then failed with 403.
+export type AuthRole = 'admin' | 'driver';
 
-export function setAuthToken(token: string | null) {
-  if (typeof window === 'undefined') return;
-  if (token) {
-    try {
-      sessionStorage.setItem(AUTH_TOKEN_KEY, token);
-      localStorage.setItem(AUTH_TOKEN_KEY, token);
-    } catch {}
-  } else {
-    try {
-      sessionStorage.removeItem(AUTH_TOKEN_KEY);
-      localStorage.removeItem(AUTH_TOKEN_KEY);
-    } catch {}
-  }
+const LEGACY_AUTH_TOKEN_KEY = 'FLEET_SESSION_JWT';
+const TOKEN_KEYS: Record<AuthRole, string> = {
+  admin: 'FLEET_ADMIN_JWT',
+  driver: 'FLEET_DRIVER_JWT',
+};
+
+// Which session the UI is currently showing (set by App when the view changes)
+let activeAuthRole: AuthRole = 'admin';
+
+export function setActiveAuthRole(role: AuthRole) {
+  activeAuthRole = role;
 }
 
-export function getAuthToken(): string | null {
-  if (typeof window === 'undefined') return null;
+function roleOfToken(token: string): AuthRole | null {
   try {
-    return sessionStorage.getItem(AUTH_TOKEN_KEY) || localStorage.getItem(AUTH_TOKEN_KEY);
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return payload.role === 'admin' || payload.role === 'driver' ? payload.role : null;
   } catch {
     return null;
   }
 }
 
-export function clearAuthToken() {
-  setAuthToken(null);
+export function setAuthToken(token: string | null, role: AuthRole = activeAuthRole) {
+  if (typeof window === 'undefined') return;
+  const key = TOKEN_KEYS[role];
+  try {
+    if (token) {
+      sessionStorage.setItem(key, token);
+      localStorage.setItem(key, token);
+    } else {
+      sessionStorage.removeItem(key);
+      localStorage.removeItem(key);
+    }
+  } catch {}
+}
+
+export function getAuthToken(role: AuthRole = activeAuthRole): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const key = TOKEN_KEYS[role];
+    const own = sessionStorage.getItem(key) || localStorage.getItem(key);
+    if (own) return own;
+    // Sessions created before this change used a single shared key: honour it only if it belongs to this role
+    const legacy = sessionStorage.getItem(LEGACY_AUTH_TOKEN_KEY) || localStorage.getItem(LEGACY_AUTH_TOKEN_KEY);
+    return legacy && roleOfToken(legacy) === role ? legacy : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Clears one role's token, or both when no role is given. */
+export function clearAuthToken(role?: AuthRole) {
+  const roles: AuthRole[] = role ? [role] : ['admin', 'driver'];
+  roles.forEach((r) => setAuthToken(null, r));
+  try {
+    sessionStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
+    localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
+  } catch {}
 }
 
 export async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -201,7 +235,7 @@ export async function loginAdmin(username: string, passwordAttempt: string) {
   });
   const data = await res.json();
   if (data.success && data.token) {
-    setAuthToken(data.token);
+    setAuthToken(data.token, 'admin');
   }
   return data;
 }
@@ -246,7 +280,7 @@ export async function loginDriver(loginId: string, passwordAttempt: string) {
   });
   const data = await res.json();
   if (data.success && data.token) {
-    setAuthToken(data.token);
+    setAuthToken(data.token, 'driver');
   }
   return data;
 }
