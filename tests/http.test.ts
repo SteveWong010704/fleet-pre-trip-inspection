@@ -163,3 +163,35 @@ test('/api/version is public and returns a version string', async () => {
   assert.equal(typeof r.json.version, 'string');
   assert.ok(r.json.version.length > 0);
 });
+
+test('vehicle list status follows today\'s inspection: Pending -> Ready, Pending -> Grounded', async () => {
+  await addVehicle('TST6001');
+  await addVehicle('TST6002');
+  const statusOf = async (plate: string) => {
+    const r = await api(srv.base, 'GET', '/api/vehicles', { token: adminToken });
+    assert.equal(r.status, 200);
+    return r.json.vehicles.find((v: any) => v.vehicleNo === plate)?.currentStatus;
+  };
+  assert.equal(await statusOf('TST6001'), 'Pending Inspection');
+  assert.equal(await statusOf('TST6002'), 'Pending Inspection');
+
+  const a = await addDriver('T900');
+  const b = await addDriver('T901');
+  const pass = await api(srv.base, 'POST', '/api/inspections', {
+    token: a,
+    body: { vehicleNo: 'TST6001', overallResult: 'Pass', items: [{ id: 'brake_system', status: 'Pass' }] },
+  });
+  assert.equal(pass.status, 200);
+  const fail = await api(srv.base, 'POST', '/api/inspections', {
+    token: b,
+    body: { vehicleNo: 'TST6002', overallResult: 'Fail', items: [{ id: 'brake_system', status: 'Fail', defectNote: 'leak' }] },
+  });
+  assert.equal(fail.status, 200);
+
+  assert.equal(await statusOf('TST6001'), 'Ready');
+  assert.equal(await statusOf('TST6002'), 'Grounded');
+  // Filtering by status uses the same computed value
+  const ready = await api(srv.base, 'GET', '/api/vehicles?status=Ready', { token: adminToken });
+  assert.ok(ready.json.vehicles.some((v: any) => v.vehicleNo === 'TST6001'));
+  assert.ok(!ready.json.vehicles.some((v: any) => v.vehicleNo === 'TST6002'));
+});
