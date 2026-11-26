@@ -455,13 +455,36 @@ export function saveStoreSync() {
 }
 
 // Vehicle APIs
-export function getVehicleEffectiveStatus(v: Vehicle, targetDate: Date | string = new Date()): VehicleStatus {
+const normalizePlate = (plate: string) => (plate || '').replace(/\s+/g, '').toUpperCase();
+
+/**
+ * Plate -> first inspection on the target date, in list order (the same record the
+ * per-vehicle `find` below would return). Built fresh for each call and never cached,
+ * so it can never be out of date.
+ */
+function indexInspectionsForDay(targetDate: Date | string): Map<string, InspectionRecord> {
+  const index = new Map<string, InspectionRecord>();
+  for (const i of memoryStore.inspections) {
+    if (!isSameDay(i.timestamp, targetDate)) continue;
+    const plate = normalizePlate(i.vehicleNo);
+    if (!index.has(plate)) index.set(plate, i);
+  }
+  return index;
+}
+
+export function getVehicleEffectiveStatus(
+  v: Vehicle,
+  targetDate: Date | string = new Date(),
+  dayIndex?: Map<string, InspectionRecord>
+): VehicleStatus {
   // 1. Check if the vehicle has completed an inspection on the target calendar date
-  const cleanPlate = v.vehicleNo.replace(/\s+/g, '').toUpperCase();
-  const insp = memoryStore.inspections.find(i => 
-    i.vehicleNo.replace(/\s+/g, '').toUpperCase() === cleanPlate &&
-    isSameDay(i.timestamp, targetDate)
-  );
+  const cleanPlate = normalizePlate(v.vehicleNo);
+  const insp = dayIndex
+    ? dayIndex.get(cleanPlate)
+    : memoryStore.inspections.find(i =>
+        normalizePlate(i.vehicleNo) === cleanPlate &&
+        isSameDay(i.timestamp, targetDate)
+      );
 
   if (insp) {
     return insp.overallResult === 'Pass' ? 'Ready' : 'Grounded';
@@ -479,9 +502,11 @@ export function getVehicleEffectiveStatus(v: Vehicle, targetDate: Date | string 
 
 export function getVehicles(filters?: { branch?: string; status?: string; search?: string }): Vehicle[] {
   const today = new Date();
+  // One pass over the inspections instead of one pass per vehicle
+  const todayIndex = indexInspectionsForDay(today);
   let list = memoryStore.vehicles.map(v => ({
     ...v,
-    currentStatus: getVehicleEffectiveStatus(v, today),
+    currentStatus: getVehicleEffectiveStatus(v, today, todayIndex),
   }));
 
   if (filters?.branch && filters.branch !== 'ALL') {
@@ -1140,6 +1165,20 @@ export {
   deleteRbacUser,
 };
 
+// Creating an Intl.DateTimeFormat is expensive (~0.2ms each); it was being built for every
+// record on every scan. One shared instance gives identical output.
+const KL_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kuala_Lumpur',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+// Timestamp string -> KL calendar date. The conversion is pure (same input, same output),
+// so remembering it is always safe. Bounded so it cannot grow without limit.
+const timestampDayCache = new Map<string, string>();
+const TIMESTAMP_DAY_CACHE_MAX = 100_000;
+
 // Helper to extract calendar date string (YYYY-MM-DD) in local / Asia/Kuala_Lumpur (UTC+8) timezone
 export function getCalendarDateString(val: Date | string | InspectionRecord | any = new Date()): string {
   if (!val) return '';
@@ -1172,15 +1211,15 @@ export function getCalendarDateString(val: Date | string | InspectionRecord | an
     if (ymd && !s.includes('Z') && !/[+\-]\d{2}:?\d{2}$/.test(s)) {
       return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
     }
+    const cached = timestampDayCache.get(s);
+    if (cached !== undefined) return cached;
     try {
       const d = new Date(s);
       if (!isNaN(d.getTime())) {
-        return new Intl.DateTimeFormat('en-CA', {
-          timeZone: 'Asia/Kuala_Lumpur',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-        }).format(d);
+        const day = KL_DATE_FORMATTER.format(d);
+        if (timestampDayCache.size >= TIMESTAMP_DAY_CACHE_MAX) timestampDayCache.clear();
+        timestampDayCache.set(s, day);
+        return day;
       }
     } catch {}
     return ymd ? `${ymd[1]}-${ymd[2]}-${ymd[3]}` : '';
@@ -1189,12 +1228,7 @@ export function getCalendarDateString(val: Date | string | InspectionRecord | an
   // 3. Date instance
   try {
     if (isNaN(val.getTime())) return '';
-    return new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Kuala_Lumpur',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(val);
+    return KL_DATE_FORMATTER.format(val);
   } catch {
     const y = val.getFullYear();
     const m = String(val.getMonth() + 1).padStart(2, '0');
