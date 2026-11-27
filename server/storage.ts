@@ -464,7 +464,25 @@ export function saveStoreSync() {
 }
 
 // Vehicle APIs
-const normalizePlate = (plate: string) => (plate || '').replace(/\s+/g, '').toUpperCase();
+// Pure string normalisers, remembered per input: the "already inspected today?" checks run
+// them over every stored inspection on each login / scan / submit. Same input, same output,
+// so caching cannot change any result. Bounded so the caches cannot grow without limit.
+const NORMALIZE_CACHE_MAX = 50_000;
+function cachedNormalize(cache: Map<string, string>, value: string, fn: (v: string) => string): string {
+  const hit = cache.get(value);
+  if (hit !== undefined) return hit;
+  const out = fn(value);
+  if (cache.size >= NORMALIZE_CACHE_MAX) cache.clear();
+  cache.set(value, out);
+  return out;
+}
+const plateCache = new Map<string, string>();
+const idCache = new Map<string, string>();
+/** 'wxt 3948 ' -> 'WXT3948' (all whitespace removed, upper case) */
+const normalizePlate = (plate: string) =>
+  cachedNormalize(plateCache, plate || '', (v) => v.replace(/\s+/g, '').toUpperCase());
+/** ' el0001 ' -> 'EL0001' */
+const normalizeId = (id: string) => cachedNormalize(idCache, id || '', (v) => v.trim().toUpperCase());
 
 /**
  * Plate -> first inspection on the target date, in list order (the same record the
@@ -1280,7 +1298,7 @@ export function getDriverDailyInspections(driverIdentifier: string): InspectionR
   const now = new Date();
 
   return memoryStore.inspections.filter(i => {
-    const inspDriverId = (i.driverId || '').trim().toUpperCase();
+    const inspDriverId = normalizeId(i.driverId || '');
     const isSameDriver =
       inspDriverId === clean ||
       (employeeId && inspDriverId === employeeId) ||
@@ -1328,7 +1346,7 @@ export function getVehicleDailyInspection(vehicleNo: string): InspectionRecord |
   const cleanPlate = vehicleNo.trim().toUpperCase().replace(/\s+/g, '');
   const now = new Date();
   const existing = memoryStore.inspections.find(i => {
-    const isSameVehicle = (i.vehicleNo || '').trim().toUpperCase().replace(/\s+/g, '') === cleanPlate;
+    const isSameVehicle = normalizePlate(i.vehicleNo || '') === cleanPlate;
     return isSameVehicle && isSameDay(i, now);
   });
   return existing || null;
@@ -1404,6 +1422,12 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
   };
 
   // 1. Offload photos from Base64 into structured hierarchy: /uploads/YYYY-MM-DD/CAR_PLATE/01_Tires_Wheels.jpg
+  // Photos are written in the background (see queuePhotoWrite) after the daily-limit checks
+  // above have passed, so a rejected submission never writes anything.
+  const photoWrites: Promise<void>[] = [];
+  const failedPhotoWrites = new Map<string, string>();
+  const savePhoto = (data: string, meta: SavePhotoMetadata) => queuePhotoWrite(data, meta, photoWrites, failedPhotoWrites);
+
   let cleanPhotos = inspectionData.photos;
   if (Array.isArray(cleanPhotos)) {
     cleanPhotos = cleanPhotos.map((ph, idx) => {
@@ -1413,7 +1437,7 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
         const title = itemInfo?.title || ph.itemTitle || `Checkpoint_${code}`;
         const fileName = getCheckpointFilename(code, title, ph.itemId, (ph as any).slotIndex, (ph as any).slotName);
 
-        const diskPath = savePhotoToDisk(ph.url, {
+        const diskPath = savePhoto(ph.url, {
           vehicleNo: inspectionData.vehicleNo,
           driverName: inspectionData.driverName,
           dateStr,
@@ -1438,7 +1462,7 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
         const title = itemInfo?.title || it.title || `Item_${code}`;
         const fileName = getCheckpointFilename(code, title, it.id);
 
-        const diskPath = savePhotoToDisk(it.photoUrl, {
+        const diskPath = savePhoto(it.photoUrl, {
           vehicleNo: inspectionData.vehicleNo,
           driverName: inspectionData.driverName,
           dateStr,
@@ -1468,7 +1492,7 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
         const title = itemInfo?.title || cp.title || `CP_${code}`;
         const fileName = getCheckpointFilename(code, title, cp.id);
 
-        const diskPath = savePhotoToDisk(cp.photoUrl, {
+        const diskPath = savePhoto(cp.photoUrl, {
           vehicleNo: inspectionData.vehicleNo,
           driverName: inspectionData.driverName,
           dateStr,
@@ -1489,7 +1513,7 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
     cleanDefects = cleanDefects.map((def, idx) => {
       if (def.photoUrl && def.photoUrl.startsWith('data:')) {
         const fileName = `defect_${idx + 1}.jpg`;
-        const diskPath = savePhotoToDisk(def.photoUrl, {
+        const diskPath = savePhoto(def.photoUrl, {
           vehicleNo: inspectionData.vehicleNo,
           driverName: inspectionData.driverName,
           dateStr,
@@ -1506,7 +1530,7 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
   // 5. Offload driver signature
   let cleanSignature = inspectionData.signature;
   if (cleanSignature && cleanSignature.startsWith('data:')) {
-    cleanSignature = savePhotoToDisk(cleanSignature, {
+    cleanSignature = savePhoto(cleanSignature, {
       vehicleNo: inspectionData.vehicleNo,
       driverName: inspectionData.driverName,
       dateStr,
@@ -1562,6 +1586,24 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
   saveStore();
   invalidateFleetStatsCache();
   dbSaveInspection(record).catch(e => console.error('[MSSQL Error] saveInspection:', e));
+
+  if (photoWrites.length > 0) {
+    pendingInspectionPhotos.set(
+      record,
+      Promise.all(photoWrites).then(() => {
+        if (failedPhotoWrites.size === 0) return;
+        // Same fallback as the synchronous writer: keep the photo data in the record itself
+        const fix = (url?: string) => (url && failedPhotoWrites.has(url) ? failedPhotoWrites.get(url)! : url);
+        record.photos = (record.photos || []).map((ph) => ({ ...ph, url: fix(ph.url)! }));
+        record.items = (record.items || []).map((it) => ({ ...it, photoUrl: fix(it.photoUrl) }));
+        if (record.checkpoints) record.checkpoints = record.checkpoints.map((cp: any) => ({ ...cp, photoUrl: fix(cp.photoUrl) }));
+        if (record.defects) record.defects = record.defects.map((d: any) => ({ ...d, photoUrl: fix(d.photoUrl) }));
+        record.signature = fix(record.signature);
+        record.primaryPhotoUrl = fix(record.primaryPhotoUrl) || '';
+        saveStore();
+      })
+    );
+  }
   return record;
 }
 
@@ -2347,14 +2389,20 @@ export function getUninspectedDriversReport(filters?: {
     }
   }
 
-  const filterDepot = (filters?.depot && filters.depot !== 'ALL') ? filters.depot.trim().toUpperCase() : null;
+  // One depot ('BL') or several ('BL,KL' for Executive SPV); 'ALL' / empty means every depot
+  const filterDepots = new Set(
+    (filters?.depot && filters.depot !== 'ALL' ? filters.depot : '')
+      .split(',')
+      .map(code => code.trim().toUpperCase())
+      .filter(Boolean)
+  );
   const searchFilter = (filters?.search || '').trim().toLowerCase();
   const desigFilter = (filters?.designation && filters.designation !== 'ALL') ? filters.designation.trim().toUpperCase() : null;
 
   let activeDrivers = memoryStore.drivers.filter(d => (d.status || 'A') === 'A');
 
-  if (filterDepot) {
-    activeDrivers = activeDrivers.filter(d => (d.depot || '').toUpperCase() === filterDepot);
+  if (filterDepots.size > 0) {
+    activeDrivers = activeDrivers.filter(d => filterDepots.has((d.depot || '').toUpperCase()));
   }
 
   if (desigFilter) {
@@ -2497,7 +2545,7 @@ export function getUninspectedDriversReport(filters?: {
       overallComplianceRate,
       dateFrom: fromStr,
       dateTo: toStr,
-      depot: filterDepot || 'ALL',
+      depot: filterDepots.size > 0 ? Array.from(filterDepots).join(',') : 'ALL',
       totalDays: dateList.length,
     },
     drivers: driverResults,
@@ -2601,70 +2649,124 @@ export interface SavePhotoMetadata {
   isSignature?: boolean;
 }
 
+/**
+ * Works out the decoded bytes and destination of a photo (same folder/file naming and
+ * path-traversal checks as always) and makes sure the folder exists. Throws on bad input.
+ */
+function resolvePhotoTarget(
+  base64Data: string,
+  metadata: SavePhotoMetadata
+): { buffer: Buffer; filePath: string; publicUrl: string } {
+  const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+  const buffer = matches ? Buffer.from(matches[2], 'base64') : Buffer.from(base64Data, 'base64');
+  
+  // 1. Date folder: YYYY-MM-DD (Strict regex validation to prevent path traversal)
+  const rawDateStr = metadata.dateStr || '';
+  const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(rawDateStr.trim())
+    ? rawDateStr.trim()
+    : new Date().toISOString().slice(0, 10);
+
+  // 2. Clean Plate: Strip internal tags and sanitize characters
+  const rawPlate = (metadata.vehicleNo || 'FLEET').split(/_(?:PH|ITM|DEF|SIG)/i)[0] || 'FLEET';
+  const cleanPlate = rawPlate.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '_') || 'FLEET';
+
+  // 3. Ensure upload directory uploads/[dateStr]/[cleanPlate] exists
+  const targetDir = path.join(UPLOADS_DIR, dateStr, cleanPlate);
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+
+  // 4. Determine clean file name with path traversal defense
+  let filename = '';
+  if (metadata.fileName) {
+    // Strip any path segments to avoid ../ attacks
+    filename = path.basename(metadata.fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+  }
+
+  if (!filename) {
+    if (metadata.isSignature) {
+      filename = 'signature.png';
+    } else if (metadata.isDefect) {
+      filename = `defect_${Number(metadata.defectIndex) || 1}.jpg`;
+    } else if (metadata.itemCode && metadata.itemTitle) {
+      const cleanTitle = metadata.itemTitle
+        .replace(/^[0-9]+\.\s*/, '')
+        .replace(/[^a-zA-Z0-9]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '');
+      filename = `${String(metadata.itemCode).padStart(2, '0')}_${cleanTitle}.jpg`;
+    } else if (metadata.itemTitle) {
+      const cleanTitle = metadata.itemTitle
+        .replace(/^[0-9]+\.\s*/, '')
+        .replace(/[^a-zA-Z0-9]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '');
+      filename = `photo_${cleanTitle}.jpg`;
+    } else {
+      filename = `photo_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}.jpg`;
+    }
+  }
+
+  // Security check: Verify resolved file path stays strictly inside UPLOADS_DIR
+  const resolvedUploadsDir = path.resolve(UPLOADS_DIR);
+  const filePath = path.resolve(targetDir, filename);
+  if (!filePath.startsWith(resolvedUploadsDir)) {
+    throw new Error('Security Error: Illegal path traversal attempt in photo upload');
+  }
+
+  return { buffer, filePath, publicUrl: `/uploads/${dateStr}/${cleanPlate}/${filename}` };
+}
+
 export function savePhotoToDisk(base64Data: string, metadata: SavePhotoMetadata = {}): string {
   try {
-    const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-    const buffer = matches ? Buffer.from(matches[2], 'base64') : Buffer.from(base64Data, 'base64');
-    
-    // 1. Date folder: YYYY-MM-DD (Strict regex validation to prevent path traversal)
-    const rawDateStr = metadata.dateStr || '';
-    const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(rawDateStr.trim())
-      ? rawDateStr.trim()
-      : new Date().toISOString().slice(0, 10);
-
-    // 2. Clean Plate: Strip internal tags and sanitize characters
-    const rawPlate = (metadata.vehicleNo || 'FLEET').split(/_(?:PH|ITM|DEF|SIG)/i)[0] || 'FLEET';
-    const cleanPlate = rawPlate.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '_') || 'FLEET';
-
-    // 3. Ensure upload directory uploads/[dateStr]/[cleanPlate] exists
-    const targetDir = path.join(UPLOADS_DIR, dateStr, cleanPlate);
-    if (!fs.existsSync(targetDir)) {
-      fs.mkdirSync(targetDir, { recursive: true });
-    }
-
-    // 4. Determine clean file name with path traversal defense
-    let filename = '';
-    if (metadata.fileName) {
-      // Strip any path segments to avoid ../ attacks
-      filename = path.basename(metadata.fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
-    }
-
-    if (!filename) {
-      if (metadata.isSignature) {
-        filename = 'signature.png';
-      } else if (metadata.isDefect) {
-        filename = `defect_${Number(metadata.defectIndex) || 1}.jpg`;
-      } else if (metadata.itemCode && metadata.itemTitle) {
-        const cleanTitle = metadata.itemTitle
-          .replace(/^[0-9]+\.\s*/, '')
-          .replace(/[^a-zA-Z0-9]/g, '_')
-          .replace(/_+/g, '_')
-          .replace(/^_|_$/g, '');
-        filename = `${String(metadata.itemCode).padStart(2, '0')}_${cleanTitle}.jpg`;
-      } else if (metadata.itemTitle) {
-        const cleanTitle = metadata.itemTitle
-          .replace(/^[0-9]+\.\s*/, '')
-          .replace(/[^a-zA-Z0-9]/g, '_')
-          .replace(/_+/g, '_')
-          .replace(/^_|_$/g, '');
-        filename = `photo_${cleanTitle}.jpg`;
-      } else {
-        filename = `photo_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}.jpg`;
-      }
-    }
-
-    // Security check: Verify resolved file path stays strictly inside UPLOADS_DIR
-    const resolvedUploadsDir = path.resolve(UPLOADS_DIR);
-    const filePath = path.resolve(targetDir, filename);
-    if (!filePath.startsWith(resolvedUploadsDir)) {
-      throw new Error('Security Error: Illegal path traversal attempt in photo upload');
-    }
-
+    const { buffer, filePath, publicUrl } = resolvePhotoTarget(base64Data, metadata);
     fs.writeFileSync(filePath, buffer);
-    return `/uploads/${dateStr}/${cleanPlate}/${filename}`;
+    return publicUrl;
   } catch (err) {
     logger.error('STORAGE', 'Save photo error:', err);
     return base64Data; // fallback
+  }
+}
+
+/**
+ * Same as savePhotoToDisk, but the file write runs in the background (libuv thread pool) so
+ * the server keeps answering other drivers. Returns the photo URL right away and adds the
+ * pending write to `writes`. If a write fails, `failed` maps that URL back to the original
+ * data so the caller can fall back exactly like savePhotoToDisk does.
+ */
+function queuePhotoWrite(
+  base64Data: string,
+  metadata: SavePhotoMetadata,
+  writes: Promise<void>[],
+  failed: Map<string, string>
+): string {
+  try {
+    const { buffer, filePath, publicUrl } = resolvePhotoTarget(base64Data, metadata);
+    writes.push(
+      fs.promises.writeFile(filePath, buffer).catch((err) => {
+        logger.error('STORAGE', 'Save photo error:', err);
+        failed.set(publicUrl, base64Data);
+      })
+    );
+    return publicUrl;
+  } catch (err) {
+    logger.error('STORAGE', 'Save photo error:', err);
+    return base64Data; // fallback
+  }
+}
+
+// Photo writes still in flight for a just-created inspection (see waitForInspectionPhotos)
+const pendingInspectionPhotos = new WeakMap<InspectionRecord, Promise<void>>();
+
+/**
+ * Resolves once every photo of a newly added inspection is on disk. The submit endpoint
+ * awaits this before replying, so a driver only sees "submitted" once the photos are saved.
+ */
+export async function waitForInspectionPhotos(record: InspectionRecord): Promise<void> {
+  const pending = pendingInspectionPhotos.get(record);
+  if (pending) {
+    await pending;
+    pendingInspectionPhotos.delete(record);
   }
 }
 

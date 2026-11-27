@@ -102,6 +102,27 @@ export const ADMIN_FEATURES: RbacFeature[] = [
   { id: 'users', label: 'User Management & RBAC', category: 'System', description: 'Staff account provisioning, depot assignment, custom positions, and permission matrix' },
 ];
 
+// Role whose staff can be assigned to several depots at once
+export const EXECUTIVE_SPV_ROLE = 'Executive SPV';
+
+export function isMultiDepotRole(roleName?: string | null): boolean {
+  return String(roleName || '').trim().toLowerCase() === EXECUTIVE_SPV_ROLE.toLowerCase();
+}
+
+/** 'BL, kl,BL' -> ['BL', 'KL'];  'ALL' / '' -> [] (meaning all depots) */
+export function parseAssignedDepots(value?: string | string[] | null): string[] {
+  const raw = Array.isArray(value) ? value : String(value || '').split(',');
+  const codes = raw.map((c) => String(c).trim().toUpperCase()).filter(Boolean);
+  if (codes.length === 0 || codes.includes('ALL')) return [];
+  return Array.from(new Set(codes));
+}
+
+/** Canonical stored form: 'ALL', 'BL' or 'BL,KL' (order kept as chosen, no duplicates) */
+export function formatAssignedDepots(value?: string | string[] | null): string {
+  const codes = parseAssignedDepots(value);
+  return codes.length === 0 ? 'ALL' : codes.join(',');
+}
+
 export interface RbacRole {
   id: string;            // unique identifier (e.g. 'global_admin', 'logistic_admin')
   name: string;          // display name (e.g. 'Global Admin', 'Logistic Admin')
@@ -117,7 +138,7 @@ export interface RbacUser {
   name: string;
   password?: string;
   role: string;          // corresponds to role name
-  assignedDepot: string; // 'ALL' or specific depot code
+  assignedDepot: string; // 'ALL', one depot code ('BL'), or several for Executive SPV ('BL,KL')
   active: boolean;
   createdAt: string;
   lastLogin?: string;

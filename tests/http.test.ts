@@ -264,3 +264,145 @@ test('log download includes the most recent requests (batched log writes are flu
   const text = await res.text();
   assert.ok(text.includes(marker), 'latest request line should be in the downloaded log');
 });
+
+// ---------- Executive SPV (multi-depot) and editing staff without their password ----------
+
+const rbacUser = async (username: string) => {
+  const r = await api(srv.base, 'GET', '/api/rbac/users', { token: adminToken });
+  return r.json.users.find((u: any) => u.username === username);
+};
+
+test('the Executive SPV role exists by default', async () => {
+  const r = await api(srv.base, 'GET', '/api/rbac/roles', { token: adminToken });
+  assert.equal(r.status, 200);
+  assert.ok(r.json.roles.some((role: any) => role.name === 'Executive SPV'));
+});
+
+test('Executive SPV can be assigned several depots; other roles cannot', async () => {
+  const created = await api(srv.base, 'POST', '/api/rbac/users', {
+    token: adminToken,
+    body: { username: 'exec1', name: 'Exec One', password: 'exec-pass-1', role: 'Executive SPV', assignedDepot: ' bl, KL ,bl' },
+  });
+  assert.equal(created.status, 201);
+  assert.equal((await rbacUser('exec1')).assignedDepot, 'BL,KL');
+
+  const rejected = await api(srv.base, 'POST', '/api/rbac/users', {
+    token: adminToken,
+    body: { username: 'logi1', name: 'Logi One', password: 'logi-pass-1', role: 'Logistic Admin', assignedDepot: 'BL,KL' },
+  });
+  assert.equal(rejected.status, 400);
+  assert.match(rejected.json.error, /Executive SPV/);
+
+  // ALL still works for every role, and a single depot is unchanged
+  const single = await api(srv.base, 'POST', '/api/rbac/users', {
+    token: adminToken,
+    body: { username: 'logi2', name: 'Logi Two', password: 'logi-pass-2', role: 'Logistic Admin', assignedDepot: 'kl' },
+  });
+  assert.equal(single.status, 201);
+  assert.equal((await rbacUser('logi2')).assignedDepot, 'KL');
+});
+
+test('editing role, depots and name without a password keeps the user\'s own password', async () => {
+  const upd = await api(srv.base, 'PUT', '/api/rbac/users/logi2', {
+    token: adminToken,
+    body: { name: 'Logi Two Renamed', role: 'Executive SPV', assignedDepot: 'BL,GB', active: true },
+  });
+  assert.equal(upd.status, 200);
+  const u = await rbacUser('logi2');
+  assert.equal(u.role, 'Executive SPV');
+  assert.equal(u.assignedDepot, 'BL,GB');
+  assert.equal(u.name, 'Logi Two Renamed');
+  // their original password still logs in
+  const login = await api(srv.base, 'POST', '/api/admin/login', { body: { username: 'logi2', password: 'logi-pass-2' } });
+  assert.equal(login.status, 200);
+  assert.equal(login.json.admin.assignedDepot, 'BL,GB');
+});
+
+test('an invalid role/depot change is rejected and changes nothing', async () => {
+  const before = await rbacUser('exec1');
+  const bad = await api(srv.base, 'PUT', '/api/rbac/users/exec1', {
+    token: adminToken,
+    body: { name: 'Should Not Apply', role: 'Logistic Admin', assignedDepot: 'BL,KL' },
+  });
+  assert.equal(bad.status, 400);
+  const after = await rbacUser('exec1');
+  assert.deepEqual(
+    { name: after.name, role: after.role, assignedDepot: after.assignedDepot },
+    { name: before.name, role: before.role, assignedDepot: before.assignedDepot }
+  );
+});
+
+test('an admin can still set a new password when they choose to', async () => {
+  const upd = await api(srv.base, 'PUT', '/api/rbac/users/exec1', { token: adminToken, body: { password: 'exec-new-pass' } });
+  assert.equal(upd.status, 200);
+  assert.equal((await api(srv.base, 'POST', '/api/admin/login', { body: { username: 'exec1', password: 'exec-pass-1' } })).status, 401);
+  assert.equal((await api(srv.base, 'POST', '/api/admin/login', { body: { username: 'exec1', password: 'exec-new-pass' } })).status, 200);
+});
+
+test('uninspected-drivers report accepts several depots (BL,KL) and one depot as before', async () => {
+  for (const [id, depot] of [['U100', 'ZQ1'], ['U101', 'ZQ2'], ['U102', 'ZQ3']]) {
+    const r = await api(srv.base, 'POST', '/api/drivers/create', {
+      token: adminToken,
+      body: { loginId: id, employeeId: `E${id}`, name: `Depot ${depot}`, password: 'pw-' + id, depot },
+    });
+    assert.equal(r.status, 200);
+  }
+  const depotsOf = async (q: string) => {
+    const r = await api(srv.base, 'GET', `/api/admin/uninspected-drivers?depot=${encodeURIComponent(q)}`, { token: adminToken });
+    assert.equal(r.status, 200);
+    return new Set(r.json.drivers.map((d: any) => String(d.depot).toUpperCase()));
+  };
+  assert.deepEqual([...(await depotsOf('ZQ1,ZQ2'))].sort(), ['ZQ1', 'ZQ2']);
+  assert.deepEqual([...(await depotsOf('ZQ3'))], ['ZQ3']);
+});
+
+// ---------- Photos are written in the background, but on disk before the driver gets "OK" ----------
+
+test('submitted photos are on disk, byte-identical, when the submit returns', async () => {
+  await addVehicle('TST8001');
+  const dt = await addDriver('T980');
+  const bytes = Buffer.from(Array.from({ length: 3000 }, (_, i) => i % 256));
+  const dataUrl = 'data:image/jpeg;base64,' + bytes.toString('base64');
+  const r = await api(srv.base, 'POST', '/api/inspections', {
+    token: dt,
+    body: {
+      vehicleNo: 'TST8001',
+      items: [{ id: 'brake_system', status: 'Pass' }],
+      photos: [0, 1].map((slotIndex) => ({ itemId: 'tires_wheels', slotIndex, url: dataUrl })),
+    },
+  });
+  assert.equal(r.status, 200);
+  const urls: string[] = r.json.inspection.photos.map((p: any) => p.url);
+  assert.equal(urls.length, 2);
+  for (const url of urls) {
+    // Same naming as before: /uploads/YYYY-MM-DD/PLATE/01_<checkpoint>_slotN.jpg
+    assert.match(url, /^\/uploads\/\d{4}-\d{2}-\d{2}\/TST8001\/01_[A-Za-z_]+_slot\d\.jpg$/);
+    const res = await fetch(srv.base + url, { headers: { Authorization: `Bearer ${adminToken}` } });
+    assert.equal(res.status, 200, url);
+    assert.ok(Buffer.from(await res.arrayBuffer()).equals(bytes), `${url} content`);
+  }
+});
+
+test('a rejected submission (vehicle already inspected) writes no photos', async () => {
+  await addVehicle('TST8002');
+  const first = await addDriver('T981');
+  const second = await addDriver('T982');
+  assert.equal((await submit(first, 'TST8002')).status, 200); // no photos
+  const dataUrl = 'data:image/jpeg;base64,' + Buffer.from('should-not-be-written').toString('base64');
+  const rejected = await api(srv.base, 'POST', '/api/inspections', {
+    token: second,
+    body: { vehicleNo: 'TST8002', items: [{ id: 'brake_system', status: 'Pass' }], photos: [{ itemId: 'tires_wheels', slotIndex: 0, url: dataUrl }] },
+  });
+  assert.equal(rejected.status, 409);
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const res = await fetch(`${srv.base}/uploads/${today}/TST8002/01_Tires_Wheels_slot1.jpg`, { headers: { Authorization: `Bearer ${adminToken}` } });
+  assert.notEqual(res.status, 200);
+});
+
+test('a busy depot: 700 pre-login requests a minute from one shared IP are not blocked', async () => {
+  const ip = { 'x-forwarded-for': '10.99.0.9' };
+  const statuses = await Promise.all(
+    Array.from({ length: 700 }, () => fetch(`${srv.base}/api/version`, { headers: ip }).then((r) => r.status))
+  );
+  assert.equal(statuses.filter((s) => s !== 200).length, 0);
+});

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { RbacRole, RbacUser, ADMIN_FEATURES } from '../src/types';
+import { RbacRole, RbacUser, ADMIN_FEATURES, EXECUTIVE_SPV_ROLE, isMultiDepotRole, parseAssignedDepots, formatAssignedDepots } from '../src/types';
 import { verifyPassword, hashPassword, passwordForStorage, isHashingEnabled } from './passwordHash';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -56,7 +56,27 @@ export const DEFAULT_ROLES: RbacRole[] = [
     permissions: ['fleet', 'operations', 'history', 'qa_pattern', 'qr'],
     createdAt: new Date().toISOString(),
   },
+  {
+    id: 'executive_spv',
+    name: EXECUTIVE_SPV_ROLE,
+    description: 'Multi-depot supervisor: compliance analytics, vehicles, drivers, inspection audits and QA patterns across the assigned depots.',
+    isSystem: false,
+    permissions: ['analytics', 'fleet', 'drivers', 'history', 'qa_pattern'],
+    createdAt: new Date().toISOString(),
+  },
 ];
+
+/**
+ * Normalises a depot assignment ('ALL', 'BL' or 'BL,KL') and enforces that only the
+ * Executive SPV role may hold more than one depot.
+ */
+function normalizeDepotAssignment(value: string | string[] | undefined, roleName: string): string {
+  const depots = formatAssignedDepots(value);
+  if (parseAssignedDepots(depots).length > 1 && !isMultiDepotRole(roleName)) {
+    throw new Error(`Only the "${EXECUTIVE_SPV_ROLE}" role can be assigned to more than one depot`);
+  }
+  return depots;
+}
 
 /**
  * Password for the primary Global Admin ("steve") ONLY when that account has none yet
@@ -288,7 +308,7 @@ export async function createRbacUser(data: {
   name: string;
   password?: string;
   role: string;
-  assignedDepot: string;
+  assignedDepot: string | string[];
 }): Promise<RbacUser> {
   const cleanUsername = data.username.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
   if (!cleanUsername || cleanUsername.length < 2) {
@@ -319,7 +339,7 @@ export async function createRbacUser(data: {
     name: cleanName,
     password: await passwordForStorage(cleanPassword),
     role: roleName,
-    assignedDepot: (data.assignedDepot || 'ALL').trim().toUpperCase(),
+    assignedDepot: normalizeDepotAssignment(data.assignedDepot, roleName),
     active: true,
     createdAt: new Date().toISOString(),
   };
@@ -337,7 +357,7 @@ export async function updateRbacUser(
     name?: string;
     password?: string;
     role?: string;
-    assignedDepot?: string;
+    assignedDepot?: string | string[];
     active?: boolean;
   }
 ): Promise<Omit<RbacUser, 'password'>> {
@@ -347,30 +367,35 @@ export async function updateRbacUser(
     throw new Error(`User "${username}" not found`);
   }
 
-  if (updates.name) {
-    user.name = updates.name.trim();
-  }
-
-  if (updates.password && updates.password.trim().length >= 4) {
-    user.password = await passwordForStorage(updates.password.trim());
-  }
-
+  // Work out the resulting role and depots first, so an invalid combination changes nothing
+  let nextRole = user.role;
   if (updates.role) {
     if (user.username === 'steve' && updates.role !== 'Global Admin') {
       throw new Error('Global Admin user "steve" cannot be demoted');
     }
     const roleMatch = rbacStore.roles.find(r => r.name.toLowerCase() === updates.role!.trim().toLowerCase());
-    user.role = roleMatch ? roleMatch.name : updates.role.trim();
+    nextRole = roleMatch ? roleMatch.name : updates.role.trim();
+  }
+  if (user.username === 'steve' && updates.active === false) {
+    throw new Error('Primary Global Admin "steve" cannot be deactivated');
+  }
+  const nextDepot = normalizeDepotAssignment(
+    updates.assignedDepot !== undefined ? updates.assignedDepot : user.assignedDepot,
+    nextRole
+  );
+
+  if (updates.name) {
+    user.name = updates.name.trim();
   }
 
-  if (updates.assignedDepot !== undefined) {
-    user.assignedDepot = (updates.assignedDepot || 'ALL').trim().toUpperCase();
+  user.role = nextRole;
+  user.assignedDepot = nextDepot;
+
+  if (updates.password && updates.password.trim().length >= 4) {
+    user.password = await passwordForStorage(updates.password.trim());
   }
 
   if (typeof updates.active === 'boolean') {
-    if (user.username === 'steve' && !updates.active) {
-      throw new Error('Primary Global Admin "steve" cannot be deactivated');
-    }
     user.active = updates.active;
   }
 

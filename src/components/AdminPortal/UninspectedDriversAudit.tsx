@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { UninspectedDriversReportResult, UninspectedDriverItem } from '../../types';
+import { UninspectedDriversReportResult, UninspectedDriverItem, parseAssignedDepots } from '../../types';
 import { fetchUninspectedDriversReportApi, fetchDrivers, fetchDepots } from '../../lib/api';
 import {
   AlertTriangle,
@@ -80,6 +80,8 @@ export const UninspectedDriversAudit: React.FC<UninspectedDriversAuditProps> = (
       ? activeAdmin.assignedDepot
       : 'ALL'
   );
+  // Executive SPV can be assigned several depots ('BL,KL'): offered as one "My Depots" choice
+  const myDepots = useMemo(() => parseAssignedDepots(activeAdmin?.assignedDepot), [activeAdmin?.assignedDepot]);
   const [search, setSearch] = useState<string>('');
   const [selectedDesignation, setSelectedDesignation] = useState<string>('ALL');
   const [filterComplianceOnly, setFilterComplianceOnly] = useState<'uninspected_only' | 'all'>('uninspected_only');
@@ -117,8 +119,8 @@ export const UninspectedDriversAudit: React.FC<UninspectedDriversAuditProps> = (
           if (code) codes.add(code);
         });
       }
-      const assignedDepot = String(activeAdmin?.assignedDepot || '').trim().toUpperCase();
-      if (assignedDepot && assignedDepot !== 'ALL') codes.add(assignedDepot);
+      // Make sure the staff member's own depot(s) are always selectable
+      parseAssignedDepots(activeAdmin?.assignedDepot).forEach(code => codes.add(code));
       setAvailableDepots(Array.from(codes).sort());
     });
     return () => { cancelled = true; };
@@ -671,6 +673,9 @@ export const UninspectedDriversAudit: React.FC<UninspectedDriversAuditProps> = (
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
               >
                 <option value="ALL">All Depots (Complete Fleet)</option>
+                {myDepots.length > 1 && (
+                  <option value={myDepots.join(',')}>My Depots ({myDepots.join(', ')})</option>
+                )}
                 {availableDepots.map(depot => (
                   <option key={depot} value={depot}>
                     Depot {depot}

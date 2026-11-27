@@ -13,7 +13,8 @@ interface RateLimitEntry {
   resetTime: number;
 }
 
-type RateLimitKeyFn = (req: express.Request) => string;
+/** Returns the bucket a request counts against, or null when this limiter does not apply to it. */
+type RateLimitKeyFn = (req: express.Request) => string | null;
 
 const clientIp = (req: express.Request) => req.ip || req.socket.remoteAddress || 'unknown';
 
@@ -38,6 +39,7 @@ export function createRateLimiter(
 
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const key = keyFn(req);
+    if (key === null) return next();
     const now = Date.now();
     let entry = hitMap.get(key);
 
@@ -85,6 +87,14 @@ const userOrIpKey: RateLimitKeyFn = (req) => {
   const user = tryGetAuthUser(req);
   return user ? `user:${user.role}:${user.sub}` : `ip:${clientIp(req)}`;
 };
+const loggedInUserKey: RateLimitKeyFn = (req) => {
+  const user = tryGetAuthUser(req);
+  return user ? `user:${user.role}:${user.sub}` : null;
+};
+// Requests made before login (QR vehicle lookup, settings, version, login itself) can only be
+// counted per IP. A driver page load makes ~5 of them, so this allows ~600 drivers a minute
+// behind one shared IP. Login brute force is limited separately per account.
+const anonymousIpKey: RateLimitKeyFn = (req) => (tryGetAuthUser(req) ? null : `ip:${clientIp(req)}`);
 
 export const authRateLimiter = chainLimiters(
   createRateLimiter(60000, 25, 'Too many login attempts. Please wait 1 minute before trying again.', loginAccountKey),
@@ -100,7 +110,8 @@ export const backupHeavyLimiter = createRateLimiter(
   'Backup action rate limit reached. Please wait a moment.'
 );
 export const generalApiLimiter = chainLimiters(
-  createRateLimiter(60000, 600, 'API rate limit reached. Please slow down.', userOrIpKey),
+  createRateLimiter(60000, 600, 'API rate limit reached. Please slow down.', loggedInUserKey),
+  createRateLimiter(60000, 3000, 'API rate limit reached. Please slow down.', anonymousIpKey),
   createRateLimiter(60000, 20000, 'API rate limit reached. Please slow down.')
 );
 
