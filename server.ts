@@ -897,6 +897,12 @@ async function startServer() {
     console.log(`[Server] Fleet Pre-Trip Inspection System running on http://0.0.0.0:${PORT}`);
   });
 
+  // Node closes idle keep-alive connections after 5s by default. When the server is busy a
+  // phone can reuse a connection at the exact moment it is closed and get a connection reset.
+  // A longer idle timeout (headersTimeout must stay above it) avoids that race.
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
+
   // If the port is already taken another instance is running. Exit instead of lingering as a
   // zombie: it would otherwise keep its backup timers and write to the same data files.
   server.on('error', (err: NodeJS.ErrnoException) => {

@@ -15,7 +15,12 @@ export default defineConfig(() => {
       host: '0.0.0.0',
       allowedHosts: true as const,
       hmr: process.env.DISABLE_HMR !== 'true',
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // Runtime data folders are not source code. Watching them made every saved photo,
+      // data save and log line trigger the dev-server file watcher.
+      watch:
+        process.env.DISABLE_HMR === 'true'
+          ? null
+          : { ignored: ['**/data/**', '**/uploads/**', '**/backups/**', '**/logs/**', '**/dist/**', '**/ocr-poc/**'] },
     },
     build: {
       sourcemap: false,

@@ -195,3 +195,72 @@ test('vehicle list status follows today\'s inspection: Pending -> Ready, Pending
   assert.ok(ready.json.vehicles.some((v: any) => v.vehicleNo === 'TST6001'));
   assert.ok(!ready.json.vehicles.some((v: any) => v.vehicleNo === 'TST6002'));
 });
+
+test('a driver token only lists that driver\'s own inspections; admin sees all', async () => {
+  await addVehicle('TST7001');
+  await addVehicle('TST7002');
+  const a = await addDriver('T950');
+  const b = await addDriver('T951');
+  assert.equal((await submit(a, 'TST7001')).status, 200);
+  assert.equal((await submit(b, 'TST7002')).status, 200);
+  const sub = (t: string) => JSON.parse(Buffer.from(t.split('.')[1], 'base64url').toString()).sub;
+
+  const mine = await api(srv.base, 'GET', '/api/inspections', { token: a });
+  assert.equal(mine.status, 200);
+  assert.ok(mine.json.inspections.length >= 1);
+  assert.ok(mine.json.inspections.every((r: any) => r.driverId === sub(a)));
+
+  const all = await api(srv.base, 'GET', '/api/inspections', { token: adminToken });
+  const ids = new Set(all.json.inspections.map((r: any) => r.driverId));
+  assert.ok(ids.has(sub(a)) && ids.has(sub(b)));
+});
+
+test('inspection list still fills depot/route and filters by depot', async () => {
+  const all = await api(srv.base, 'GET', '/api/inspections', { token: adminToken });
+  assert.ok(all.json.inspections.every((r: any) => typeof r.vehicleBranch === 'string' && r.vehicleBranch.length > 0));
+  assert.ok(all.json.inspections.every((r: any) => typeof r.route === 'string' && r.route.length > 0));
+  const branch = all.json.inspections[0].vehicleBranch;
+  const filtered = await api(srv.base, 'GET', `/api/inspections?branch=${encodeURIComponent(branch)}`, { token: adminToken });
+  assert.ok(filtered.json.inspections.length > 0);
+  assert.ok(filtered.json.inspections.every((r: any) => r.vehicleBranch === branch));
+});
+
+test('many drivers behind one shared IP can all log in (limit is per account)', async () => {
+  const sharedIp = { 'x-forwarded-for': '10.99.0.1' };
+  for (let i = 0; i < 30; i++) {
+    const id = `S${1000 + i}`;
+    const r = await api(srv.base, 'POST', '/api/drivers/create', {
+      token: adminToken,
+      body: { loginId: id, employeeId: `E${id}`, name: `Shared ${i}`, password: 'pw-' + id },
+    });
+    assert.equal(r.status, 200);
+  }
+  for (let i = 0; i < 30; i++) {
+    const id = `S${1000 + i}`;
+    const r = await api(srv.base, 'POST', '/api/drivers/login', { headers: sharedIp, body: { loginId: id, password: 'pw-' + id } });
+    assert.equal(r.status, 200, `driver ${i} on the shared IP`);
+  }
+});
+
+test('repeated attempts on ONE account are still rate limited (429)', async () => {
+  const ip = { 'x-forwarded-for': '10.99.0.2' };
+  const codes: number[] = [];
+  for (let i = 0; i < 27; i++) {
+    const r = await api(srv.base, 'POST', '/api/admin/login', { headers: ip, body: { username: 'steve', password: 'wrong-' + i } });
+    codes.push(r.status);
+  }
+  assert.ok(codes.slice(0, 25).every((c) => c === 401), codes.join(','));
+  assert.equal(codes[26], 429);
+  // the same account from another IP, and another account from the same IP, are unaffected
+  assert.equal((await api(srv.base, 'POST', '/api/admin/login', { headers: { 'x-forwarded-for': '10.99.0.3' }, body: { username: ADMIN_USER, password: ADMIN_PASS } })).status, 200);
+  assert.equal((await api(srv.base, 'POST', '/api/admin/login', { headers: ip, body: { username: 'someone-else', password: 'x' } })).status, 401);
+});
+
+test('log download includes the most recent requests (batched log writes are flushed)', async () => {
+  const marker = `/api/vehicles/LOGMARKER${Date.now()}`;
+  await api(srv.base, 'GET', marker, { token: adminToken });
+  const res = await fetch(`${srv.base}/api/system/logs/download`, { headers: { Authorization: `Bearer ${adminToken}` } });
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  assert.ok(text.includes(marker), 'latest request line should be in the downloaded log');
+});

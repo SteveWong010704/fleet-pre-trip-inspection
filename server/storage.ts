@@ -378,6 +378,9 @@ let saveDebounceTimer: NodeJS.Timeout | null = null;
 let saveCounter = 0;
 let isSaving = false;
 let pendingSave = false;
+let lastSaveStartedAt = 0;
+const SAVE_DEBOUNCE_MS = 250;
+const MIN_SAVE_INTERVAL_MS = 2000;
 
 async function performAtomicSaveAsync() {
   if (isSaving) {
@@ -386,6 +389,7 @@ async function performAtomicSaveAsync() {
   }
   isSaving = true;
   pendingSave = false;
+  lastSaveStartedAt = Date.now();
 
   try {
     // Compact JSON serialization: ~60% faster stringify, 60% less heap allocation & disk I/O
@@ -430,10 +434,15 @@ export function saveStore(immediate: boolean = false) {
   }
 
   if (saveDebounceTimer) return;
+  // The whole store is rewritten on every save (100MB+ once history builds up), so under
+  // load saves are spaced at least MIN_SAVE_INTERVAL_MS apart. Shutdown still flushes via
+  // saveStoreSync(), and explicit saveStore(true) calls are unaffected.
+  const sinceLast = Date.now() - lastSaveStartedAt;
+  const delay = Math.max(SAVE_DEBOUNCE_MS, MIN_SAVE_INTERVAL_MS - sinceLast);
   saveDebounceTimer = setTimeout(() => {
     saveDebounceTimer = null;
     performAtomicSaveAsync();
-  }, 250);
+  }, delay);
 }
 
 export function saveStoreSync() {
@@ -529,6 +538,11 @@ export function getVehicles(filters?: { branch?: string; status?: string; search
   }
 
   return list;
+}
+
+/** True when the fleet registry has at least one vehicle (no status computation). */
+export function hasVehicles(): boolean {
+  return memoryStore.vehicles.length > 0;
 }
 
 export function getVehicleByPlate(plate: string): Vehicle | undefined {
@@ -1561,9 +1575,16 @@ export function getInspections(filters?: {
   dateFrom?: string;
   dateTo?: string;
 }): InspectionRecord[] {
-  // Ensure vehicle branch and route (area, e.g. BL01) are populated from vehicle catalog
+  // Ensure vehicle branch and route (area, e.g. BL01) are populated from vehicle catalog.
+  // Plate lookup map built once (first vehicle wins, same as getVehicleByPlate) instead of
+  // a full vehicle + today's-status lookup for every record.
+  const vehicleByPlate = new Map<string, Vehicle>();
+  for (const veh of memoryStore.vehicles) {
+    const key = normalizePlate(veh.vehicleNo);
+    if (!vehicleByPlate.has(key)) vehicleByPlate.set(key, veh);
+  }
   let list = memoryStore.inspections.map(r => {
-    const v = getVehicleByPlate(r.vehicleNo);
+    const v = vehicleByPlate.get(normalizePlate(r.vehicleNo));
     const resolvedBranch = (r.vehicleBranch || v?.branch || 'BL').trim().toUpperCase();
     const resolvedRoute = (r.route && r.route !== 'General Route' && !r.route.startsWith('Route-'))
       ? r.route.trim().toUpperCase()

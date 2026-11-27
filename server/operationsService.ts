@@ -419,13 +419,21 @@ export function linkVehicleToOperations(v: Vehicle) {
   // 2. Link route to vehicle plate
   if (routeCode && plate) {
     let routeFound = false;
+    // Only rewrite master_routes.json when a link actually changed (this runs on every
+    // vehicle update, i.e. every inspection submit, and usually changes nothing).
+    let changed = false;
     memoryRoutes.forEach(r => {
       if (r.code === routeCode) {
+        if (r.assignedVehiclePlate !== plate) changed = true;
         r.assignedVehiclePlate = plate;
-        if (branch) r.depotId = branch;
+        if (branch) {
+          if (r.depotId !== branch) changed = true;
+          r.depotId = branch;
+        }
         routeFound = true;
       } else if (r.assignedVehiclePlate === plate && r.code !== routeCode) {
         delete r.assignedVehiclePlate;
+        changed = true;
       }
     });
 
@@ -438,8 +446,9 @@ export function linkVehicleToOperations(v: Vehicle) {
         assignedVehiclePlate: plate,
         active: true,
       });
+      changed = true;
     }
-    saveRoutes();
+    if (changed) saveRoutes();
   }
 }
 

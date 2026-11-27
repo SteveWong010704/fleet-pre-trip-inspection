@@ -97,6 +97,14 @@ export interface ExecutiveAnalyticsResult {
  * 2. Checks timestamp / Timestamp as a fallback, converting offset-aware values to Asia/Kuala_Lumpur.
  * 3. Falls back to certificate ID (INSP-YYYYMMDD-XXXX).
  */
+// One shared formatter (building one per call is slow; output is identical)
+const KL_DATE_PARTS_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kuala_Lumpur',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
 export function getInspectionDateKey(inspection: InspectionRecord | any): string {
   if (!inspection) return '';
 
@@ -147,12 +155,7 @@ export function getInspectionDateKey(inspection: InspectionRecord | any): string
 
     const value = raw instanceof Date ? raw : new Date(String(raw));
     if (!Number.isNaN(value.getTime())) {
-      const parts = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Asia/Kuala_Lumpur',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-      }).formatToParts(value);
+      const parts = KL_DATE_PARTS_FORMATTER.formatToParts(value);
       const part = (type: string) => parts.find(p => p.type === type)?.value || '';
       const res = `${part('year')}-${part('month')}-${part('day')}`;
       if (res && res.length === 10) return res;
@@ -170,9 +173,7 @@ export function getInspectionDateKey(inspection: InspectionRecord | any): string
 }
 
 export function formatLocalDateKey(date: Date): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(date);
+  const parts = KL_DATE_PARTS_FORMATTER.formatToParts(date);
   const part = (type: string) => parts.find(p => p.type === type)?.value || '';
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
@@ -808,6 +809,16 @@ export function calculateExecutiveAnalytics(
   // 3b. Daily Metrics per Depot (Daily Compliance Breakdown by Depot)
   const dailyDepotMetrics: DailyDepotMetric[] = [];
   const sortedDatesDesc = Object.keys(trendMap).sort((a, b) => b.localeCompare(a));
+
+  // Group once by "date|depot" (keeps the original order inside each group) instead of
+  // re-filtering every scoped inspection for every date x depot pair.
+  const inspectionsByDateDepot = new Map<string, InspectionRecord[]>();
+  scopedInspections.forEach(insp => {
+    const key = `${getInspectionDateKey(insp)}|${(insp.vehicleBranch || 'BL').toUpperCase()}`;
+    const bucket = inspectionsByDateDepot.get(key);
+    if (bucket) bucket.push(insp);
+    else inspectionsByDateDepot.set(key, [insp]);
+  });
   
   sortedDatesDesc.forEach(dateKey => {
     const d = new Date(dateKey + 'T00:00:00Z');
@@ -818,11 +829,7 @@ export function calculateExecutiveAnalytics(
 
     depotRankings.forEach(dr => {
       const dep = dr.depot;
-      const dayInspections = scopedInspections.filter(insp => {
-        const iDate = getInspectionDateKey(insp);
-        const iDep = (insp.vehicleBranch || 'BL').toUpperCase();
-        return iDate === dateKey && iDep === dep;
-      });
+      const dayInspections = inspectionsByDateDepot.get(`${dateKey}|${dep}`) || [];
 
       const total = dayInspections.length;
       let passed = 0;
