@@ -22,7 +22,7 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
-import { RbacUser, RbacRole, RbacFeature, ADMIN_FEATURES, DepotItem } from '../../types';
+import { RbacUser, RbacRole, RbacFeature, ADMIN_FEATURES, DepotItem, isMultiDepotRole, parseAssignedDepots, formatAssignedDepots } from '../../types';
 import {
   fetchRbacUsers,
   fetchRbacRoles,
@@ -66,6 +66,8 @@ export const UserManagement: React.FC = () => {
     role: 'Logistic Admin',
     assignedDepot: 'ALL',
     active: true,
+    // Editing: the password is only changed when the admin explicitly ticks "Change password"
+    changePassword: false,
   });
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [userModalSubmitting, setUserModalSubmitting] = useState<boolean>(false);
@@ -123,7 +125,9 @@ export const UserManagement: React.FC = () => {
   const filteredUsers = useMemo(() => {
     return users.filter((u) => {
       if (roleFilter !== 'ALL' && u.role !== roleFilter) return false;
-      if (depotFilter !== 'ALL' && u.assignedDepot !== depotFilter) return false;
+      // A depot filter matches users assigned to that depot (Executive SPV: any of theirs).
+      // Users on ALL depots are not listed under a single depot, as before.
+      if (depotFilter !== 'ALL' && !parseAssignedDepots(u.assignedDepot).includes(depotFilter)) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         return (
@@ -147,6 +151,7 @@ export const UserManagement: React.FC = () => {
       role: roles.length > 0 ? roles[0].name : 'Logistic Admin',
       assignedDepot: 'ALL',
       active: true,
+      changePassword: true,
     });
     setShowPassword(false);
     setShowUserModal(true);
@@ -162,6 +167,7 @@ export const UserManagement: React.FC = () => {
       role: user.role,
       assignedDepot: user.assignedDepot || 'ALL',
       active: user.active,
+      changePassword: false,
     });
     setShowPassword(false);
     setShowUserModal(true);
@@ -175,15 +181,18 @@ export const UserManagement: React.FC = () => {
       return;
     }
 
-    if (!editingUser) {
-      if (!userFormData.username.trim()) {
-        alert('Username is required');
-        return;
-      }
-      if (!userFormData.password || userFormData.password.length < 4) {
-        alert('Password must be at least 4 characters long');
-        return;
-      }
+    if (!editingUser && !userFormData.username.trim()) {
+      alert('Username is required');
+      return;
+    }
+    // New users always need a password; existing users only when "Change password" is ticked
+    if ((!editingUser || userFormData.changePassword) && userFormData.password.trim().length < 4) {
+      alert('Password must be at least 4 characters long');
+      return;
+    }
+    if (isMultiDepotRole(userFormData.role) && userFormData.assignedDepot !== 'ALL' && parseAssignedDepots(userFormData.assignedDepot).length === 0) {
+      alert('Select at least one depot, or ALL Depots');
+      return;
     }
 
     try {
@@ -191,7 +200,7 @@ export const UserManagement: React.FC = () => {
       if (editingUser) {
         await updateRbacUserApi(editingUser.username, {
           name: userFormData.name.trim(),
-          password: userFormData.password.trim() || undefined,
+          password: userFormData.changePassword ? userFormData.password.trim() : undefined,
           role: userFormData.role,
           assignedDepot: userFormData.assignedDepot,
           active: userFormData.active,
@@ -638,7 +647,7 @@ export const UserManagement: React.FC = () => {
                       <td className="py-3 px-3">
                         <span className="font-mono text-xs font-bold text-slate-800 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200 inline-flex items-center gap-1">
                           <Building2 className="w-3 h-3 text-slate-500" />
-                          <span>{user.assignedDepot || 'ALL'}</span>
+                          <span>{parseAssignedDepots(user.assignedDepot).join(', ') || 'ALL'}</span>
                         </span>
                       </td>
 
@@ -871,13 +880,16 @@ export const UserManagement: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleSaveUser} className="space-y-4 text-xs">
+            {/* autoComplete="off": stop the browser filling the signed-in admin's saved login into this form */}
+            <form onSubmit={handleSaveUser} autoComplete="off" className="space-y-4 text-xs">
               {/* Username (Locked if editing) */}
               <div className="space-y-1">
                 <label className="block font-bold text-slate-700">Username</label>
                 <input
                   type="text"
                   value={userFormData.username}
+                  autoComplete="off"
+                  name="new-staff-username"
                   disabled={!!editingUser}
                   onChange={(e) =>
                     setUserFormData((prev) => ({
@@ -903,37 +915,60 @@ export const UserManagement: React.FC = () => {
                 />
               </div>
 
-              {/* Password */}
+              {/* Password: required when creating; when editing, only changed on request so the
+                  admin never has to type (or accidentally overwrite) the user's own password */}
               <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="block font-bold text-slate-700">
-                    Password {editingUser && <span className="font-normal text-slate-400">(leave blank to keep current)</span>}
+                {editingUser && (
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={userFormData.changePassword}
+                      onChange={(e) =>
+                        setUserFormData((prev) => ({ ...prev, changePassword: e.target.checked, password: '' }))
+                      }
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                    />
+                    <span className="font-bold text-slate-700">Change this user&apos;s password</span>
+                    {!userFormData.changePassword && (
+                      <span className="text-[10px] text-slate-400">(current password is kept)</span>
+                    )}
                   </label>
-                  <button
-                    type="button"
-                    onClick={handleGeneratePassword}
-                    className="text-[11px] text-blue-600 hover:text-blue-800 font-semibold cursor-pointer flex items-center gap-1"
-                  >
-                    <Sparkles className="w-3 h-3" />
-                    <span>Generate Strong</span>
-                  </button>
-                </div>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={userFormData.password}
-                    onChange={(e) => setUserFormData((prev) => ({ ...prev, password: e.target.value }))}
-                    placeholder={editingUser ? '••••••••' : 'Enter user login password'}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-3 pr-10 py-2 text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
+                )}
+                {(!editingUser || userFormData.changePassword) && (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <label className="block font-bold text-slate-700">
+                        {editingUser ? 'New Password' : 'Password'}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleGeneratePassword}
+                        className="text-[11px] text-blue-600 hover:text-blue-800 font-semibold cursor-pointer flex items-center gap-1"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        <span>Generate Strong</span>
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={userFormData.password}
+                        autoComplete="new-password"
+                        name="new-staff-password"
+                        onChange={(e) => setUserFormData((prev) => ({ ...prev, password: e.target.value }))}
+                        placeholder={editingUser ? 'Enter the new password' : 'Enter user login password'}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl pl-3 pr-10 py-2 text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Position / Role & Assigned Depot (2 columns) */}
@@ -944,7 +979,18 @@ export const UserManagement: React.FC = () => {
                   <select
                     value={userFormData.role}
                     disabled={editingUser?.username === 'steve'}
-                    onChange={(e) => setUserFormData((prev) => ({ ...prev, role: e.target.value }))}
+                    onChange={(e) => {
+                      const role = e.target.value;
+                      setUserFormData((prev) => {
+                        const selected = parseAssignedDepots(prev.assignedDepot);
+                        // Only Executive SPV may hold several depots; other roles keep the first one
+                        let assignedDepot = prev.assignedDepot;
+                        if (!isMultiDepotRole(role)) {
+                          assignedDepot = selected.length > 1 ? selected[0] : selected[0] || 'ALL';
+                        }
+                        return { ...prev, role, assignedDepot };
+                      });
+                    }}
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer disabled:opacity-60"
                   >
                     {roles.map((r) => (
@@ -955,22 +1001,82 @@ export const UserManagement: React.FC = () => {
                   </select>
                 </div>
 
-                {/* Assigned Depot */}
-                <div className="space-y-1">
-                  <label className="block font-bold text-slate-700">Assigned Depot</label>
-                  <select
-                    value={userFormData.assignedDepot}
-                    onChange={(e) => setUserFormData((prev) => ({ ...prev, assignedDepot: e.target.value }))}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                  >
-                    <option value="ALL">ALL Depots (Full Network)</option>
-                    {depots.map((d) => (
-                      <option key={d.code} value={d.code}>
-                        {d.code} {d.name ? `- ${d.name}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {/* Assigned Depot: one depot (dropdown), or several for Executive SPV (checkboxes) */}
+                {!isMultiDepotRole(userFormData.role) ? (
+                  <div className="space-y-1">
+                    <label className="block font-bold text-slate-700">Assigned Depot</label>
+                    <select
+                      value={userFormData.assignedDepot}
+                      onChange={(e) => setUserFormData((prev) => ({ ...prev, assignedDepot: e.target.value }))}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                    >
+                      <option value="ALL">ALL Depots (Full Network)</option>
+                      {depots.map((d) => (
+                        <option key={d.code} value={d.code}>
+                          {d.code} {d.name ? `- ${d.name}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="space-y-1 sm:col-span-2">
+                    {(() => {
+                      const isAll = userFormData.assignedDepot === 'ALL';
+                      const selected = parseAssignedDepots(userFormData.assignedDepot);
+                      const toggleDepot = (code: string) =>
+                        setUserFormData((prev) => {
+                          const current = parseAssignedDepots(prev.assignedDepot);
+                          const next = current.includes(code) ? current.filter((c) => c !== code) : [...current, code];
+                          // Unticking the last depot leaves nothing selected (checked on save)
+                          return { ...prev, assignedDepot: next.length === 0 ? '' : formatAssignedDepots(next) };
+                        });
+                      return (
+                        <>
+                          <div className="flex items-center justify-between">
+                            <label className="block font-bold text-slate-700">Assigned Depots (select one or more)</label>
+                            <span className="text-[10px] text-slate-500 font-semibold">
+                              {isAll ? 'All depots' : `${selected.length} selected`}
+                            </span>
+                          </div>
+                          <label className="flex items-center gap-2 cursor-pointer select-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <input
+                              type="checkbox"
+                              checked={isAll}
+                              onChange={(e) =>
+                                setUserFormData((prev) => ({ ...prev, assignedDepot: e.target.checked ? 'ALL' : '' }))
+                              }
+                              className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                            />
+                            <span className="font-semibold text-slate-800">ALL Depots (Full Network)</span>
+                          </label>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-44 overflow-y-auto rounded-lg border border-slate-200 p-2">
+                            {depots.map((d) => {
+                              const code = String(d.code || '').toUpperCase();
+                              return (
+                                <label
+                                  key={code}
+                                  className={`flex items-center gap-2 select-none rounded-md px-2 py-1.5 ${
+                                    isAll ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    disabled={isAll}
+                                    checked={!isAll && selected.includes(code)}
+                                    onChange={() => toggleDepot(code)}
+                                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                                  />
+                                  <span className="font-mono font-bold text-slate-800">{code}</span>
+                                  {d.name && <span className="truncate text-[10px] text-slate-500">{d.name}</span>}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
 
               {/* Status checkbox */}

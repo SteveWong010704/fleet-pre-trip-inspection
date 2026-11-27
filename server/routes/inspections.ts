@@ -1,7 +1,7 @@
 import express from 'express';
 import {
   hasVehicles, getVehicleByPlate, getDriverByLogin, getDriverDailyInspections,
-  isSupervisor, getVehicleDailyInspection, getInspections, addInspection,
+  isSupervisor, getVehicleDailyInspection, getInspections, addInspection, waitForInspectionPhotos,
   bulkImportInspections, clearAllInspections, updateInspectionPhotoQa,
   getDriverQaPatternReport, getUninspectedDriversReport, seedSampleDriverQaAudits,
 } from '../storage';
@@ -9,7 +9,7 @@ import { requireAuth, requireAdmin, requireSecurityPassword, type AuthTokenPaylo
 
 export function registerInspectionRoutes(app: express.Express) {
   // Submit Inspection (Protected: requires verified session, server-enforced identity to prevent IDOR)
-  app.post('/api/inspections', requireAuth, (req, res) => {
+  app.post('/api/inspections', requireAuth, async (req, res) => {
     try {
       const inspectionData = req.body;
       const authUser = (req as any).user as AuthTokenPayload;
@@ -82,6 +82,8 @@ export function registerInspectionRoutes(app: express.Express) {
       }
 
       const created = addInspection(inspectionData);
+      // Reply only once the photos are on disk (they are written without blocking the server)
+      await waitForInspectionPhotos(created);
       res.json({ success: true, inspection: created });
     } catch (err: any) {
       const isConflict = err.message && (err.message.includes('Limit Reached') || err.message.includes('Already Inspected'));

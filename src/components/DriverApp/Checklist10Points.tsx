@@ -1258,14 +1258,20 @@ export const Checklist10Points: React.FC<Props> = ({
 
       {/* ================= FIXED BOTTOM NAVIGATION FOOTER ================= */}
       <div className="flex items-center justify-between gap-2 pt-1 flex-shrink-0">
-        <button
-          type="button"
-          onClick={handlePrevCard}
-          className="px-3.5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1 transition cursor-pointer shadow-xs"
-        >
-          <ChevronLeft className="w-4 h-4" />
-          <span>{currentCardIndex === 0 ? 'Vehicle Scan' : `Card #${currentCardIndex}`}</span>
-        </button>
+        {/* Card 1 has no back button: the vehicle comes only from its QR code, so there is no
+            "Vehicle Scan" step to return to. Later cards can still go back one card. */}
+        {currentCardIndex > 0 ? (
+          <button
+            type="button"
+            onClick={handlePrevCard}
+            className="px-3.5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1 transition cursor-pointer shadow-xs"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            <span>{`Card #${currentCardIndex}`}</span>
+          </button>
+        ) : (
+          <span aria-hidden="true" />
+        )}
 
         <button
           type="button"

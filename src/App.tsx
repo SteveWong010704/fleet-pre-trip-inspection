@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useVersionCheck } from './lib/useVersionCheck';
 import { Driver, Vehicle, InspectionCheckItem, InspectionPhoto, InspectionRecord, STANDARD_10_POINT_ITEMS, getActiveInspectionItems, isSaturdayInspection, requiresFull15PhotoInspection, AdminUser } from './types';
 import { Navbar } from './components/Navbar';
 import { DriverAuth } from './components/DriverApp/DriverAuth';
-import { VehicleScanner } from './components/DriverApp/VehicleScanner';
+import { QrVehicleConfirm } from './components/DriverApp/QrVehicleConfirm';
 import { Checklist10Points } from './components/DriverApp/Checklist10Points';
 import { DeclarationAndSubmit } from './components/DriverApp/DeclarationAndSubmit';
 import { InspectionCertificate } from './components/DriverApp/InspectionCertificate';
@@ -91,6 +91,11 @@ export default function App() {
   // Driver App State
   const [activeDriver, setActiveDriver] = useState<Driver | null>(null);
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
+  // Vehicle bound by the QR link (?plate=...). Login waits for this load so a fast login can
+  // never land on an empty vehicle step.
+  const qrVehicleLoad = useRef<Promise<Vehicle | null> | null>(null);
+  const [qrVehicleLoading, setQrVehicleLoading] = useState<boolean>(false);
+  const [qrPlateInUrl, setQrPlateInUrl] = useState<boolean>(false);
   const [driverStep, setDriverStep] = useState<'auth' | 'scanner' | 'checklist' | 'declaration' | 'certificate'>('auth');
 
   // A new deploy is picked up automatically, but only when a driver is not mid-inspection
@@ -171,20 +176,37 @@ export default function App() {
       setCurrentView('driver');
       setDriverStep('auth');
       if (plateParam) {
-        fetchVehicleByPlate(plateParam, tokenParam).then((v) => {
-          if (v) {
-            if (tokenParam && !v.qrVerified) {
-              console.warn(`[Security] Direct URL access for ${plateParam} supplied mismatched security token.`);
-            }
-            setSelectedVehicle(v);
-          }
-        }).catch(() => {});
+        setQrPlateInUrl(true);
+        loadQrVehicle();
       }
     } else {
       // Direct access (e.g. http://192.168.1.80:3000/ or root link)
       setCurrentView('admin');
     }
   }, []);
+
+  // Loads the vehicle named in the QR link (?plate=...&token=...). Safe to call again (retry).
+  const loadQrVehicle = (): Promise<Vehicle | null> => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const plateParam = urlParams.get('plate');
+    const tokenParam = (urlParams.get('token') || urlParams.get('qrToken') || urlParams.get('t') || '').trim();
+    if (!plateParam) return Promise.resolve(null);
+    setQrVehicleLoading(true);
+    const load = fetchVehicleByPlate(plateParam, tokenParam)
+      .then((v) => {
+        if (v) {
+          if (tokenParam && !v.qrVerified) {
+            console.warn(`[Security] Direct URL access for ${plateParam} supplied mismatched security token.`);
+          }
+          setSelectedVehicle(v);
+        }
+        return v || null;
+      })
+      .catch(() => null)
+      .finally(() => setQrVehicleLoading(false));
+    qrVehicleLoad.current = load;
+    return load;
+  };
 
   // Driver Auth Handler
   const handleDriverAuthenticated = async (driver: Driver) => {
@@ -199,10 +221,18 @@ export default function App() {
       }
     } catch {}
 
-    // 2. If vehicle was bound via QR scan, check if vehicle has already been inspected today
-    if (selectedVehicle) {
+    // 2. If vehicle was bound via QR scan, check if vehicle has already been inspected today.
+    //    Wait (up to 8s) for the QR vehicle if it is still loading.
+    let qrVehicle = selectedVehicle;
+    if (!qrVehicle && qrVehicleLoad.current) {
+      qrVehicle = await Promise.race([
+        qrVehicleLoad.current,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+      ]);
+    }
+    if (qrVehicle) {
       try {
-        const vCheck = await checkVehicleDailyInspection(selectedVehicle.vehicleNo);
+        const vCheck = await checkVehicleDailyInspection(qrVehicle.vehicleNo);
         if (vCheck.hasInspectedToday && vCheck.inspection) {
           setActiveDriver(driver);
           setCompletedRecord(vCheck.inspection);
@@ -213,11 +243,9 @@ export default function App() {
     }
 
     setActiveDriver(driver);
-    if (selectedVehicle) {
-      setChecklistItems(createInitialChecklist(selectedVehicle));
-      setPhotos([]);
-    }
-    setDriverStep(selectedVehicle ? 'checklist' : 'scanner');
+    // Step 1 always shows the scanned vehicle with a single Next button
+    // (or scan instructions when no QR vehicle is bound). Next starts the checklist.
+    setDriverStep('scanner');
   };
 
   const handleDriverLogout = () => {
@@ -266,6 +294,9 @@ export default function App() {
   };
 
   const handleStartNewInspection = () => {
+    // The next vehicle must come from scanning its QR code (the old link was already used)
+    setQrPlateInUrl(false);
+    qrVehicleLoad.current = null;
     setSelectedVehicle(null);
     setCompletedRecord(null);
     setPhotos([]);
@@ -334,7 +365,7 @@ export default function App() {
                       1
                     </span>
                     <span className={driverStep === 'scanner' ? 'font-bold text-blue-600' : 'text-slate-500 font-medium'}>
-                      Step 1: Vehicle QR Scan
+                      Step 1: Vehicle (scan QR)
                     </span>
                   </div>
                   <ArrowRight className="w-4 h-4 text-slate-300" />
@@ -379,14 +410,12 @@ export default function App() {
             {/* Step 2: Vehicle Selection & QR Scanner */}
             {driverStep === 'scanner' && activeDriver && (
               <div className="space-y-4">
-                <VehicleScanner
+                <QrVehicleConfirm
                   activeDriver={activeDriver}
-                  onVehicleSelected={handleVehicleSelected}
-                  selectedVehicle={selectedVehicle}
-                  onViewCertificate={(record) => {
-                    setCompletedRecord(record);
-                    setDriverStep('certificate');
-                  }}
+                  vehicle={selectedVehicle}
+                  loading={qrVehicleLoading && !selectedVehicle}
+                  onRetry={qrPlateInUrl && !selectedVehicle ? () => { loadQrVehicle(); } : undefined}
+                  onNext={handleVehicleSelected}
                 />
               </div>
             )}
@@ -418,7 +447,6 @@ export default function App() {
                   photos={photos}
                   onPhotosChange={setPhotos}
                   onProceed={handleProceedToDeclaration}
-                  onBackToScanner={() => setDriverStep('scanner')}
                   onInspectionCompleted={handleInspectionFinished}
                 />
               </div>
