@@ -41,13 +41,40 @@ function rotateIfNeeded(filePath: string) {
   } catch {}
 }
 
+// Lines are batched and appended every FLUSH_INTERVAL_MS (one write per file per batch)
+// instead of opening the file for every request. Order is kept, and anything still
+// buffered is written synchronously when the process exits.
+const FLUSH_INTERVAL_MS = 200;
+const pendingLines = new Map<string, string[]>();
+let flushTimer: NodeJS.Timeout | null = null;
+
+function flushLogs() {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  for (const [filePath, lines] of pendingLines) {
+    if (lines.length === 0) continue;
+    pendingLines.set(filePath, []);
+    try {
+      rotateIfNeeded(filePath);
+      fs.appendFileSync(filePath, lines.join('\n') + '\n', 'utf-8');
+    } catch (err) {
+      // If disk write fails, at least fail quietly to console
+      console.error('[Logger Write Error]', err);
+    }
+  }
+}
+
+process.on('exit', flushLogs);
+
 function writeToFile(filePath: string, line: string) {
-  try {
-    rotateIfNeeded(filePath);
-    fs.appendFileSync(filePath, line + '\n', 'utf-8');
-  } catch (err) {
-    // If disk write fails, at least fail quietly to console
-    console.error('[Logger Write Error]', err);
+  const lines = pendingLines.get(filePath);
+  if (lines) lines.push(line);
+  else pendingLines.set(filePath, [line]);
+  if (!flushTimer) {
+    flushTimer = setTimeout(flushLogs, FLUSH_INTERVAL_MS);
+    if (flushTimer.unref) flushTimer.unref();
   }
 }
 
@@ -149,6 +176,7 @@ class Logger {
   }
 
   getLogFilePath(type: 'app' | 'error' = 'app'): string {
+    flushLogs(); // callers read the file right away (log download)
     return type === 'error' ? ERROR_LOG_FILE : APP_LOG_FILE;
   }
 }

@@ -1,6 +1,6 @@
 import express from 'express';
 import {
-  getVehicles, getVehicleByPlate, getDriverByLogin, getDriverDailyInspections,
+  hasVehicles, getVehicleByPlate, getDriverByLogin, getDriverDailyInspections,
   isSupervisor, getVehicleDailyInspection, getInspections, addInspection,
   bulkImportInspections, clearAllInspections, updateInspectionPhotoQa,
   getDriverQaPatternReport, getUninspectedDriversReport, seedSampleDriverQaAudits,
@@ -25,8 +25,7 @@ export function registerInspectionRoutes(app: express.Express) {
       }
 
       // Check if vehicle exists in fleet directory (if roster is not empty)
-      const allVehicles = getVehicles();
-      if (allVehicles.length > 0) {
+      if (hasVehicles()) {
         const vehicle = getVehicleByPlate(inspectionData.vehicleNo);
         if (!vehicle) {
           return res.status(400).json({ success: false, message: `Vehicle ${inspectionData.vehicleNo} does not exist in fleet registry.` });
@@ -122,6 +121,17 @@ export function registerInspectionRoutes(app: express.Express) {
         dateFrom: dateFrom as string,
         dateTo: dateTo as string,
       });
+      // Drivers only ever see their own inspections (the admin portal is the only screen
+      // that lists inspections; the driver app does not call this endpoint).
+      const authUser = (req as any).user as AuthTokenPayload;
+      if (authUser?.role === 'driver') {
+        const me = getDriverByLogin(authUser.sub);
+        const ids = new Set(
+          [authUser.sub, me?.employeeId, me?.loginId].filter(Boolean).map((x) => String(x).trim().toUpperCase())
+        );
+        const own = records.filter((r) => ids.has(String(r.driverId || '').trim().toUpperCase()));
+        return res.json({ success: true, count: own.length, inspections: own });
+      }
       res.json({ success: true, count: records.length, inspections: records });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });

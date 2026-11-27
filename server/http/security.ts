@@ -13,28 +13,37 @@ interface RateLimitEntry {
   resetTime: number;
 }
 
-export function createRateLimiter(windowMs: number, maxRequests: number, message: string) {
-  const ipMap = new Map<string, RateLimitEntry>();
+type RateLimitKeyFn = (req: express.Request) => string;
+
+const clientIp = (req: express.Request) => req.ip || req.socket.remoteAddress || 'unknown';
+
+export function createRateLimiter(
+  windowMs: number,
+  maxRequests: number,
+  message: string,
+  keyFn: RateLimitKeyFn = clientIp
+) {
+  const hitMap = new Map<string, RateLimitEntry>();
 
   // Cleanup expired entries periodically to prevent memory accumulation
   const cleanupTimer = setInterval(() => {
     const now = Date.now();
-    for (const [ip, entry] of ipMap.entries()) {
+    for (const [key, entry] of hitMap.entries()) {
       if (now > entry.resetTime) {
-        ipMap.delete(ip);
+        hitMap.delete(key);
       }
     }
   }, Math.max(windowMs, 60000));
   if (cleanupTimer.unref) cleanupTimer.unref();
 
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const key = keyFn(req);
     const now = Date.now();
-    let entry = ipMap.get(ip);
+    let entry = hitMap.get(key);
 
     if (!entry || now > entry.resetTime) {
       entry = { count: 1, resetTime: now + windowMs };
-      ipMap.set(ip, entry);
+      hitMap.set(key, entry);
       return next();
     }
 
@@ -53,25 +62,46 @@ export function createRateLimiter(windowMs: number, maxRequests: number, message
   };
 }
 
-export const authRateLimiter = createRateLimiter(
-  60000,
-  25,
-  'Too many login attempts. Please wait 1 minute before trying again.'
+/** Runs several limiters in order; the first one that rejects ends the request. */
+function chainLimiters(...limiters: express.RequestHandler[]): express.RequestHandler {
+  return (req, res, next) => {
+    let i = 0;
+    const run = (): void => {
+      if (i >= limiters.length) return next();
+      const limiter = limiters[i++];
+      limiter(req, res, run);
+    };
+    run();
+  };
+}
+
+// Many drivers share one depot Wi-Fi / mobile carrier IP, so limits are counted per
+// account (or per logged-in user), with a much higher per-IP ceiling as a backstop.
+const loginAccountKey: RateLimitKeyFn = (req) => {
+  const account = String(req.body?.username || req.body?.loginId || '').trim().toLowerCase();
+  return `${clientIp(req)}|${account}`;
+};
+const userOrIpKey: RateLimitKeyFn = (req) => {
+  const user = tryGetAuthUser(req);
+  return user ? `user:${user.role}:${user.sub}` : `ip:${clientIp(req)}`;
+};
+
+export const authRateLimiter = chainLimiters(
+  createRateLimiter(60000, 25, 'Too many login attempts. Please wait 1 minute before trying again.', loginAccountKey),
+  createRateLimiter(60000, 600, 'Too many login attempts. Please wait 1 minute before trying again.')
 );
-export const photoUploadLimiter = createRateLimiter(
-  60000,
-  120,
-  'Photo upload rate limit reached. Please wait a moment.'
+export const photoUploadLimiter = chainLimiters(
+  createRateLimiter(60000, 120, 'Photo upload rate limit reached. Please wait a moment.', userOrIpKey),
+  createRateLimiter(60000, 6000, 'Photo upload rate limit reached. Please wait a moment.')
 );
 export const backupHeavyLimiter = createRateLimiter(
   60000,
   15,
   'Backup action rate limit reached. Please wait a moment.'
 );
-export const generalApiLimiter = createRateLimiter(
-  60000,
-  600,
-  'API rate limit reached. Please slow down.'
+export const generalApiLimiter = chainLimiters(
+  createRateLimiter(60000, 600, 'API rate limit reached. Please slow down.', userOrIpKey),
+  createRateLimiter(60000, 20000, 'API rate limit reached. Please slow down.')
 );
 
 // Cryptographic JWT Token Engine (Node native crypto, HMAC-SHA256)
