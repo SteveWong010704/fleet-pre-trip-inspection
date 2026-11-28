@@ -582,6 +582,8 @@ export const InspectionHistory: React.FC<InspectionHistoryProps> = ({ onNavigate
     { key: 'emergency_equipment', code: 8, name: 'Emergency Equipment (APAD)' },
     { key: 'body_passenger_doors', code: 9, name: 'Cargo & Body' },
     { key: 'dashboard_warnings', code: 10, name: 'Dashboard & Meter' },
+    // Saturday full set only (11th checkpoint). Weekday records simply show N/A for it.
+    { key: 'puspakum_roadtax', code: 11, name: 'PUSPAKOM & Road Tax' },
   ];
 
   const isBrakeKeyword = (text?: string): boolean => {
@@ -1236,7 +1238,8 @@ export const InspectionHistory: React.FC<InspectionHistoryProps> = ({ onNavigate
       r.vehicleBranch || 'BL',
       r.route || (r.vehicleBranch ? `${r.vehicleBranch}01` : 'BL01'),
       `${r.driverName}\n(${r.driverId})`,
-      `${r.odometer.toLocaleString()} km`,
+      // A record without an odometer (e.g. bulk import) must not break the whole page
+      r.odometer != null ? `${Number(r.odometer).toLocaleString()} km` : '-',
       `${r.fuelLevel}%`,
       r.overallResult,
       r.defectCount > 0 ? `${r.defectCount} Defect(s)\n${r.defectSummary || ''}` : 'All 10 Pass',
@@ -1879,7 +1882,7 @@ export const InspectionHistory: React.FC<InspectionHistoryProps> = ({ onNavigate
                         {formatMalaysiaDateTime(r.timestamp) || r.formattedDate}
                       </td>
                       <td className="px-3.5 py-3 font-mono">
-                        <div className="font-medium text-slate-800">{r.odometer.toLocaleString()} KM</div>
+                        <div className="font-medium text-slate-800">{r.odometer != null ? `${Number(r.odometer).toLocaleString()} KM` : '-'}</div>
                         <div className="text-[10px] text-blue-600 font-semibold">{r.fuelLevel}% Fuel</div>
                       </td>
                       <td className="px-3.5 py-3">
@@ -2573,6 +2576,7 @@ export const InspectionHistory: React.FC<InspectionHistoryProps> = ({ onNavigate
                 'steering_handling',
                 'fluids_powertrain',
                 'emergency_equipment',
+                'puspakum_roadtax',
               ];
               const otherItems = activeRecord.items?.filter((i) => otherIds.includes(i.id)) || [];
               const isFeeder =
