@@ -347,7 +347,7 @@ export default function App() {
                       {driverStep === 'scanner'
                         ? 'Step 1: Vehicle Assignment'
                         : (driverStep as string) === 'checklist'
-                        ? 'Step 2: 10-Point Card Inspection'
+                        ? `Step 2: ${checklistItems.length}-Point Card Inspection`
                         : 'Step 3: Meter & Declaration'}
                     </span>
                   </div>
@@ -376,7 +376,7 @@ export default function App() {
                       2
                     </span>
                     <span className={(driverStep as string) === 'checklist' ? 'font-bold text-blue-600' : 'text-slate-500 font-medium'}>
-                      Step 2: 10-Point Card Inspection (10 Cards)
+                      Step 2: Card Inspection ({checklistItems.length} Cards)
                     </span>
                   </div>
                   <ArrowRight className="w-4 h-4 text-slate-300" />

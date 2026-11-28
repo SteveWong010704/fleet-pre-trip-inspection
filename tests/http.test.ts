@@ -406,3 +406,28 @@ test('a busy depot: 700 pre-login requests a minute from one shared IP are not b
   );
   assert.equal(statuses.filter((s) => s !== 200).length, 0);
 });
+
+test('Saturday full set: the 11th checkpoint (PUSPAKOM & Road Tax) and its photo are saved', async () => {
+  const { getActiveInspectionItems } = await import('../src/types');
+  await addVehicle('TST9001');
+  const dt = await addDriver('T990');
+  const items = getActiveInspectionItems({ truckCategory: 'Small Truck' }, true).map((it: any) => ({ ...it, status: 'Pass' }));
+  assert.equal(items.length, 11);
+  const photo = 'data:image/jpeg;base64,' + Buffer.from('pusp').toString('base64');
+  const r = await api(srv.base, 'POST', '/api/inspections', {
+    token: dt,
+    body: {
+      vehicleNo: 'TST9001', overallResult: 'Pass', odometer: 1000, items,
+      photos: items.map((it: any) => ({ itemId: it.id, itemTitle: it.title, slotIndex: 0, url: photo })),
+    },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.inspection.items.length, 11);
+  assert.ok(r.json.inspection.items.some((i: any) => i.id === 'puspakum_roadtax' && i.code === 11));
+  const puspPhoto = r.json.inspection.photos.find((p: any) => p.itemId === 'puspakum_roadtax');
+  assert.match(puspPhoto.url, /\/11_[A-Za-z0-9_]+\.jpg$/);
+  // and the admin list returns it with all 11 items
+  const list = await api(srv.base, 'GET', '/api/inspections', { token: adminToken });
+  const saved = list.json.inspections.find((x: any) => x.id === r.json.inspection.id);
+  assert.equal(saved.items.length, 11);
+});

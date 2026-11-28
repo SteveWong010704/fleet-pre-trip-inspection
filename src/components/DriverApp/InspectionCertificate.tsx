@@ -315,7 +315,7 @@ export const InspectionCertificate: React.FC<InspectionCertificateProps> = ({
         {/* 10-Item Inspection Results Matrix */}
         <div className="py-6 border-b border-slate-100 space-y-3">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-            10-Point Item Verification Results
+            {record.items.length}-Point Item Verification Results
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {record.items.map((item, i) => (

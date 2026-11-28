@@ -1409,6 +1409,7 @@ export function addInspection(inspectionData: Omit<InspectionRecord, 'id' | 'tim
     diesel_fuel_cap: { code: 9, title: 'Diesel_Fuel_Cap' },
     hvac_ventilation: { code: 9, title: 'Diesel_Fuel_Cap' }, // Legacy alias
     fluids_powertrain: { code: 10, title: 'Fluids_Powertrain' },
+    puspakum_roadtax: { code: 11, title: 'Puspakom_RoadTax' }, // Saturday only
   };
 
   const getCheckpointFilename = (code: number, title?: string, fallbackId?: string, slotIndex?: number, slotName?: string) => {
